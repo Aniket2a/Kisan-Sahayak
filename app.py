@@ -12,7 +12,7 @@ from flask import (
     flash, session, jsonify, g
 )
 from werkzeug.security import generate_password_hash, check_password_hash
-from database import get_db, init_db
+from database import get_db, init_db, sync_admin_credentials
 
 app = Flask(__name__)
 # Generate secure secret key from environment or cryptographically secure token
@@ -957,7 +957,16 @@ def login():
             flash('Please enter both credentials.', 'danger')
             return render_template('login.html')
 
+        # Check if environment-based admin login is configured
+        env_admin_user = os.environ.get('ADMIN_USERNAME', '').strip().lower()
+        env_admin_pass = os.environ.get('ADMIN_PASSWORD', '').strip()
+
         conn = get_db()
+        # If matching environment admin credentials, ensure admin user is synced
+        if env_admin_user and env_admin_pass:
+            if (username_or_email == env_admin_user or username_or_email == f"{env_admin_user}@kisansahayak.in") and password == env_admin_pass:
+                sync_admin_credentials(conn)
+
         user = conn.execute("""
         SELECT * FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?
         """, (username_or_email, username_or_email)).fetchone()

@@ -92,14 +92,21 @@ http://127.0.0.1:5000
 
 ---
 
-## 🔑 Pre-Seeded Demo Accounts
+## 🔒 Administrator & Environment Configuration
 
-| Role | Username / Email | Password | Description |
+Admin access is controlled securely via environment variables rather than hardcoded credentials:
+
+| Variable | Required | Description | Example |
 | :--- | :--- | :--- | :--- |
-| **Administrator** | `admin` *(admin@kisansahayak.in)* | `admin123` | Full access to Admin Dashboard, CRUD resources, and moderation |
-| **Demo Farmer** | `ramesh_kumar` *(ramesh.farmer@gmail.com)* | `farmer123` | Pre-configured farmer account from Punjab with saved schemes and posts |
+| `ADMIN_USERNAME` | Yes (for admin access) | Username for administrator account | `admin` or `lead_admin` |
+| `ADMIN_PASSWORD` | Yes (for admin access) | Strong password for administrator account | `YourSecurePassword2026!` |
+| `SECRET_KEY` | Recommended in production | Secret key for session security & CSRF | `32-byte-hex-string` |
+| `FLASK_DEBUG` | Optional | Set to `True` for local debugging only | `False` |
 
-*You can also register a new farmer account anytime with your preferred Indian state and farming interest.*
+### 🌾 Pre-Seeded Demo Farmer Account
+* **Username / Email**: `ramesh_kumar` *(ramesh.farmer@gmail.com)*
+* **Password**: `farmer123`
+* *You can also register a new farmer account anytime with your preferred Indian state and farming interest.*
 
 ---
 
@@ -107,7 +114,7 @@ http://127.0.0.1:5000
 ```bash
 python test_app.py
 ```
-*All 11 isolated test suites verify database integrity, CSRF defense, open redirect protection, authentication, bookmarks, likes, weather advisories, error handling, and admin controls.*
+*All 11 isolated test suites verify database integrity, environment-based admin authentication, CSRF defense, open redirect protection, farmer authentication, bookmarks, likes, weather advisories, error handling, and admin controls.*
 
 ---
 

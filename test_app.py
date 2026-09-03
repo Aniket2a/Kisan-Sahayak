@@ -1,6 +1,6 @@
 """
 Automated Test Suite for Kisan Sahayak Web Application
-Isolated Test Database Environment
+Isolated Test Database Environment with Secure Environment-based Admin Authentication
 """
 
 import os
@@ -10,10 +10,12 @@ import unittest
 import json
 import uuid
 
-# Configure isolated test database environment
+# Configure isolated test database environment and admin environment variables
 TEMP_TEST_DIR = tempfile.mkdtemp()
 TEST_DB_PATH = os.path.join(TEMP_TEST_DIR, 'test_kisan.db')
 os.environ['KISAN_DB_PATH'] = TEST_DB_PATH
+os.environ['ADMIN_USERNAME'] = 'custom_admin'
+os.environ['ADMIN_PASSWORD'] = 'SecureAdminPass2026!'
 
 from app import app
 from database import init_db
@@ -142,18 +144,24 @@ class KisanSahayakTestCase(unittest.TestCase):
         self.assertIn(b'Thank you for rating and reviewing', fb_res.data)
 
     def test_08_admin_authorization_and_crud(self):
-        """Test admin dashboard access, resource creation, and deletion."""
+        """Test admin dashboard access, security against old credentials, and environment-based admin login."""
+        # Non-admin farmer tries to access admin -> Denied
         self.client.post('/login', data={'username_or_email': 'ramesh_kumar', 'password': 'farmer123'})
         admin_deny = self.client.get('/admin', follow_redirects=True)
         self.assertIn(b'Access denied', admin_deny.data)
 
         self.client.get('/logout')
 
-        self.client.post('/login', data={'username_or_email': 'admin', 'password': 'admin123'})
-        admin_page = self.client.get('/admin')
-        self.assertEqual(admin_page.status_code, 200)
-        self.assertIn(b'Admin Control Center', admin_page.data)
+        # Test that old hardcoded admin / admin123 credentials FAIL
+        legacy_res = self.client.post('/login', data={'username_or_email': 'admin', 'password': 'admin123'}, follow_redirects=True)
+        self.assertIn(b'Invalid username/email or password', legacy_res.data)
 
+        # Test that environment-based admin credentials SUCCEED
+        admin_login = self.client.post('/login', data={'username_or_email': 'custom_admin', 'password': 'SecureAdminPass2026!'}, follow_redirects=True)
+        self.assertEqual(admin_login.status_code, 200)
+        self.assertIn(b'Admin Control Center', admin_login.data)
+
+        # Add new resource via authenticated admin
         add_res = self.client.post('/admin/resource/add', data={
             'title': 'National Honey Mission Initiative',
             'resource_type': 'scheme',

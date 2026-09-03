@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from werkzeug.security import generate_password_hash
+from werkzeug.security import generate_password_hash, check_password_hash
 
 DB_FOLDER = os.path.join(os.path.dirname(__file__), 'database')
 DB_PATH = os.path.join(DB_FOLDER, 'database.db')
@@ -28,6 +28,56 @@ def is_database_empty(conn):
         except Exception:
             pass
     return total_count == 0
+
+def sync_admin_credentials(conn=None):
+    """
+    Synchronizes the admin account from ADMIN_USERNAME and ADMIN_PASSWORD environment variables.
+    Ensures that default hardcoded 'admin / admin123' credentials never work.
+    """
+    admin_user = os.environ.get('ADMIN_USERNAME', '').strip().lower()
+    admin_pass = os.environ.get('ADMIN_PASSWORD', '').strip()
+
+    close_after = False
+    if conn is None:
+        conn = get_db()
+        close_after = True
+
+    cursor = conn.cursor()
+
+    # Invalidate/delete legacy hardcoded 'admin' user with 'admin123' if present
+    legacy_admin = cursor.execute("SELECT id, password_hash FROM users WHERE username = 'admin'").fetchone()
+    if legacy_admin:
+        try:
+            if check_password_hash(legacy_admin['password_hash'], 'admin123'):
+                if not (admin_user == 'admin' and admin_pass and admin_pass != 'admin123'):
+                    cursor.execute("DELETE FROM users WHERE id = ?", (legacy_admin['id'],))
+                    conn.commit()
+        except Exception:
+            pass
+
+    # If ADMIN_USERNAME and ADMIN_PASSWORD are provided, create or update the admin account
+    if admin_user and admin_pass:
+        p_hash = generate_password_hash(admin_pass)
+        existing = cursor.execute("SELECT id FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?",
+                                  (admin_user, f"{admin_user}@kisansahayak.in")).fetchone()
+        if existing:
+            cursor.execute("""
+            UPDATE users SET
+                username = ?,
+                password_hash = ?,
+                role = 'admin',
+                full_name = 'Admin Officer'
+            WHERE id = ?
+            """, (admin_user, p_hash, existing['id']))
+        else:
+            cursor.execute("""
+            INSERT INTO users (full_name, username, email, password_hash, state, preferred_category, role)
+            VALUES (?, ?, ?, ?, 'New Delhi', 'Government Schemes', 'admin')
+            """, ('Admin Officer', admin_user, f"{admin_user}@kisansahayak.in", p_hash))
+        conn.commit()
+
+    if close_after:
+        conn.close()
 
 def init_db(force_reset=False):
     """Initializes the database schema and seeds initial data only if genuinely empty or force_reset=True."""
@@ -154,6 +204,9 @@ def init_db(force_reset=False):
         if is_database_empty(conn):
             seed_data(conn, force_reset=False)
 
+    # Always ensure admin credentials are synchronized from environment variables
+    sync_admin_credentials(conn)
+
     conn.close()
 
 def seed_data(conn, force_reset=False):
@@ -175,9 +228,8 @@ def seed_data(conn, force_reset=False):
         except Exception:
             pass
 
-    # 1. Seed Users (Demo accounts use project domain instead of .gov.in)
+    # 1. Seed Demo Farmer Users (No hardcoded admin credentials)
     users_data = [
-        ('Admin Officer', 'admin', 'admin@kisansahayak.in', generate_password_hash('admin123'), 'New Delhi', 'Government Schemes', 'admin'),
         ('Ramesh Kumar', 'ramesh_kumar', 'ramesh.farmer@gmail.com', generate_password_hash('farmer123'), 'Punjab', 'Seeds & Crops', 'user'),
         ('Sunita Devi', 'sunita_devi', 'sunita.devi@yahoo.com', generate_password_hash('farmer123'), 'Madhya Pradesh', 'Organic Farming', 'user'),
         ('Balwinder Singh', 'balwinder_singh', 'balwinder@agrimail.in', generate_password_hash('farmer123'), 'Haryana', 'Farming Tools', 'user')
@@ -670,15 +722,24 @@ def seed_data(conn, force_reset=False):
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, r)
 
+    # Map usernames to user IDs for reliable foreign key seeding
+    user_id_map = {}
+    for row in cursor.execute("SELECT id, username FROM users").fetchall():
+        user_id_map[row['username']] = row['id']
+
+    ramesh_id = user_id_map.get('ramesh_kumar', 1)
+    sunita_id = user_id_map.get('sunita_devi', 2)
+    balwinder_id = user_id_map.get('balwinder_singh', 3)
+
     # 4. Seed Bookmarks
     bookmarks_data = [
-        (2, 1), # Ramesh saved Rice
-        (2, 2), # Ramesh saved Wheat
-        (2, 18), # Ramesh saved PM-KISAN
-        (2, 24), # Ramesh saved KCC
-        (3, 28), # Sunita saved ZBNF
-        (3, 29), # Sunita saved Soil Health
-        (4, 11), # Balwinder saved Rotavator
+        (ramesh_id, 1), # Ramesh saved Rice
+        (ramesh_id, 2), # Ramesh saved Wheat
+        (ramesh_id, 18), # Ramesh saved PM-KISAN
+        (ramesh_id, 24), # Ramesh saved KCC
+        (sunita_id, 28), # Sunita saved ZBNF
+        (sunita_id, 29), # Sunita saved Soil Health
+        (balwinder_id, 11), # Balwinder saved Rotavator
     ]
     for b in bookmarks_data:
         existing = cursor.execute("SELECT id FROM bookmarks WHERE user_id = ? AND resource_id = ?", b).fetchone()
@@ -690,10 +751,10 @@ def seed_data(conn, force_reset=False):
 
     # 5. Seed Feedback & Ratings
     feedback_data = [
-        (2, 18, 5, 'PM-KISAN DBT installment was credited directly on time. Very helpful summary of documentation criteria!'),
-        (3, 28, 5, 'Jeevamrit preparation steps are explained clearly. Practicing natural farming in our 3-acre orchard.'),
-        (4, 11, 4, 'Rotavator implement specifications helped me choose the right HP tractor attachment.'),
-        (2, 24, 5, 'Applied for Kisan Credit Card renewal with subvention benefit through our local gramin bank.')
+        (ramesh_id, 18, 5, 'PM-KISAN DBT installment was credited directly on time. Very helpful summary of documentation criteria!'),
+        (sunita_id, 28, 5, 'Jeevamrit preparation steps are explained clearly. Practicing natural farming in our 3-acre orchard.'),
+        (balwinder_id, 11, 4, 'Rotavator implement specifications helped me choose the right HP tractor attachment.'),
+        (ramesh_id, 24, 5, 'Applied for Kisan Credit Card renewal with subvention benefit through our local gramin bank.')
     ]
     for fb in feedback_data:
         existing = cursor.execute("SELECT id FROM feedback WHERE user_id = ? AND resource_id = ?", (fb[0], fb[1])).fetchone()
@@ -705,9 +766,9 @@ def seed_data(conn, force_reset=False):
 
     # 6. Seed Community Posts
     posts_data = [
-        (2, 'Best organic pest control for leaf curl in tomato?', 'Pest Control', 'Hello fellow farmers, I am noticing yellow leaf curl virus and whiteflies on my 2-month-old tomato plants in Punjab. Has anyone tried yellow sticky traps or neem oil emulsion (10,000 ppm) with success? Would love your recommendations on dosage.'),
-        (3, 'Drip irrigation subsidy application procedure through PMKSY', 'Irrigation & Subsidies', 'We recently got our 4-acre guava orchard surveyed for drip installation under PM Krishi Sinchayee Yojana. For those who completed the subsidy process: how long did the physical inspection take after submitting the online 7/12 land extract?'),
-        (4, 'Wheat variety recommendation for timely sown irrigated conditions in Rabi', 'Seeds & Crops', 'Looking for high-yield, yellow rust-resistant wheat varieties for the upcoming Rabi season in Haryana. Considering HD-2967 vs HD-3086 or DBW-187 (Karan Vandana). What has been your average yield per acre?')
+        (ramesh_id, 'Best organic pest control for leaf curl in tomato?', 'Pest Control', 'Hello fellow farmers, I am noticing yellow leaf curl virus and whiteflies on my 2-month-old tomato plants in Punjab. Has anyone tried yellow sticky traps or neem oil emulsion (10,000 ppm) with success? Would love your recommendations on dosage.'),
+        (sunita_id, 'Drip irrigation subsidy application procedure through PMKSY', 'Irrigation & Subsidies', 'We recently got our 4-acre guava orchard surveyed for drip installation under PM Krishi Sinchayee Yojana. For those who completed the subsidy process: how long did the physical inspection take after submitting the online 7/12 land extract?'),
+        (balwinder_id, 'Wheat variety recommendation for timely sown irrigated conditions in Rabi', 'Seeds & Crops', 'Looking for high-yield, yellow rust-resistant wheat varieties for the upcoming Rabi season in Haryana. Considering HD-2967 vs HD-3086 or DBW-187 (Karan Vandana). What has been your average yield per acre?')
     ]
     for p in posts_data:
         existing = cursor.execute("SELECT id FROM community_posts WHERE title = ?", (p[1],)).fetchone()
@@ -719,10 +780,10 @@ def seed_data(conn, force_reset=False):
 
     # 7. Seed Comments
     comments_data = [
-        (1, 3, 'Neem oil spray (5ml per litre with mild soap surfactant) sprayed every 7 days along with 10 yellow sticky traps per acre worked very well for my tomato plot!'),
-        (1, 4, 'Also make sure to destroy any weed hosts around the field borders where whitefly colonies shelter.'),
-        (2, 1, 'In our district, the horticulture officer conducted site inspection within 14 working days. Keep your water source electricity connection certificate ready.'),
-        (3, 2, 'DBW-187 (Karan Vandana) gave us 24 quintals per acre last season with proper two split doses of urea and timely terminal irrigation.')
+        (1, sunita_id, 'Neem oil spray (5ml per litre with mild soap surfactant) sprayed every 7 days along with 10 yellow sticky traps per acre worked very well for my tomato plot!'),
+        (1, balwinder_id, 'Also make sure to destroy any weed hosts around the field borders where whitefly colonies shelter.'),
+        (2, ramesh_id, 'In our district, the horticulture officer conducted site inspection within 14 working days. Keep your water source electricity connection certificate ready.'),
+        (3, sunita_id, 'DBW-187 (Karan Vandana) gave us 24 quintals per acre last season with proper two split doses of urea and timely terminal irrigation.')
     ]
     for c in comments_data:
         existing = cursor.execute("SELECT id FROM comments WHERE post_id = ? AND user_id = ? AND comment = ?", c).fetchone()
@@ -734,13 +795,13 @@ def seed_data(conn, force_reset=False):
 
     # 8. Seed Likes
     likes_data = [
-        (1, 2),
-        (1, 3),
-        (1, 4),
-        (2, 2),
-        (2, 4),
-        (3, 2),
-        (3, 3)
+        (1, ramesh_id),
+        (1, sunita_id),
+        (1, balwinder_id),
+        (2, sunita_id),
+        (2, balwinder_id),
+        (3, ramesh_id),
+        (3, sunita_id)
     ]
     for l in likes_data:
         existing = cursor.execute("SELECT id FROM likes WHERE post_id = ? AND user_id = ?", l).fetchone()

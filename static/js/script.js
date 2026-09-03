@@ -1,6 +1,7 @@
 /**
  * Kisan Sahayak — Interactive JavaScript Handlers
- * Features: Mobile drawer, AJAX bookmarking, post likes, star ratings, modal controllers, client-side filtering.
+ * Features: Mobile drawer, AJAX bookmarking, post likes, star ratings, modal controllers, 
+ * client-side filtering, scroll reveals, back-to-top button, smooth UI transitions.
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -12,6 +13,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initAdminModals();
   initClientSearchFilter();
   initFlashDismissal();
+  initScrollReveal();
+  initBackToTop();
 });
 
 // Helper to get CSRF token from meta tag
@@ -345,6 +348,87 @@ function initClientSearchFilter() {
       } else {
         card.style.display = 'none';
       }
+    });
+  });
+}
+
+// --- 8. SCROLL REVEAL ANIMATIONS ---
+function initScrollReveal() {
+  // Check if prefers-reduced-motion is enabled
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    return;
+  }
+
+  const elementsToReveal = document.querySelectorAll(
+    '.resource-card, .dash-summary-card, .feature-card, .section-header, .stat-box, .weather-hero-card, .mandi-table-card, .post-card, .auth-card, .agri-tip-card, .quick-access-btn'
+  );
+
+  if (elementsToReveal.length === 0) return;
+
+  if (!('IntersectionObserver' in window)) {
+    elementsToReveal.forEach(el => el.classList.add('is-revealed'));
+    return;
+  }
+
+  // Stagger grid items gracefully
+  const grids = document.querySelectorAll('.resource-grid, .dash-summary-grid, .features-grid, .stats-grid, .quick-access-grid, .forecast-grid');
+  grids.forEach(grid => {
+    Array.from(grid.children).forEach((child, index) => {
+      child.style.transitionDelay = `${Math.min(index * 0.06, 0.3)}s`;
+    });
+  });
+
+  const revealObserver = new IntersectionObserver((entries, observer) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('is-revealed');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, {
+    threshold: 0.08,
+    rootMargin: '0px 0px -25px 0px'
+  });
+
+  elementsToReveal.forEach(el => {
+    el.classList.add('reveal-on-scroll');
+    revealObserver.observe(el);
+  });
+}
+
+// --- 9. BACK TO TOP FLOATING BUTTON ---
+function initBackToTop() {
+  let btn = document.getElementById('backToTopBtn');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'backToTopBtn';
+    btn.className = 'back-to-top-btn';
+    btn.setAttribute('aria-label', 'Back to top of page');
+    btn.setAttribute('title', 'Scroll to top');
+    btn.innerHTML = '<i class="fa-solid fa-arrow-up"></i>';
+    document.body.appendChild(btn);
+  }
+
+  let isTicking = false;
+  window.addEventListener('scroll', () => {
+    if (!isTicking) {
+      window.requestAnimationFrame(() => {
+        if (window.scrollY > 280) {
+          btn.classList.add('show');
+        } else {
+          btn.classList.remove('show');
+        }
+        isTicking = false;
+      });
+      isTicking = true;
+    }
+  }, { passive: true });
+
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.scrollTo({
+      top: 0,
+      behavior: 'smooth'
     });
   });
 }
