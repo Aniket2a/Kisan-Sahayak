@@ -6,6 +6,9 @@ from datetime import datetime
 import urllib.parse
 import urllib.request
 import json
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -57,6 +60,88 @@ SAMPLE_MANDI_PRICES = [
     {"crop": "Gram / Chana", "mandi": "Latur APMC, Maharashtra", "price": 5980, "unit": "₹ / Quintal", "trend": "stable", "change": "+₹10"}
 ]
 
+DATA_GOV_MANDI_API = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
+
+
+def get_mandi_prices(limit=10, state=None):
+    """
+    Fetch daily mandi prices from the Government of India's
+    data.gov.in API.
+    """
+
+    api_key = os.environ.get("DATA_GOV_API_KEY")
+
+    if not api_key:
+        return (
+            SAMPLE_MANDI_PRICES,
+            False,
+            "Government mandi API key is not configured. Showing demonstration data."
+        )
+
+    try:
+        params = {
+            "api-key": api_key,
+            "format": "json",
+            "limit": limit,
+            "offset": 0
+        }
+
+        if state:
+            params["filters[state.keyword]"] = state
+
+        url = DATA_GOV_MANDI_API + "?" + urllib.parse.urlencode(params)
+
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "Kisan-Sahayak/1.0"
+            }
+        )
+
+        with urllib.request.urlopen(req, timeout=8) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+        records = data.get("records", [])
+
+        if not records:
+            return (
+                SAMPLE_MANDI_PRICES,
+                False,
+                "No mandi records found for the selected state."
+            )
+
+        prices = []
+
+        for record in records:
+            prices.append({
+                "crop": record.get("commodity", "Unknown Commodity"),
+                "variety": record.get("variety", ""),
+                "mandi": record.get("market", "Unknown Market"),
+                "state": record.get("state", ""),
+                "district": record.get("district", ""),
+                "grade": record.get("grade", ""),
+                "arrival_date": record.get("arrival_date", ""),
+                "min_price": record.get("min_price", 0),
+                "max_price": record.get("max_price", 0),
+                "price": record.get("modal_price", 0),
+                "unit": "₹ / Quintal"
+            })
+
+        return (
+            prices,
+            True,
+            "Government of India mandi data"
+        )
+
+    except Exception as e:
+        print(f"Mandi API error: {e}")
+
+        return (
+            SAMPLE_MANDI_PRICES,
+            False,
+            "Government mandi API temporarily unavailable. Showing demonstration data."
+        )
 def is_safe_url(target):
     """Validates that a redirect URL is local and safe against open redirect vulnerabilities."""
     if not target:
@@ -620,6 +705,7 @@ def get_simulated_weather(city_info):
 def marketplace():
     category_filter = request.args.get('cat', 'All')
     search_query = request.args.get('q', '').strip()
+    mandi_state = request.args.get('mandi_state', '').strip()
 
     conn = get_db()
     query = "SELECT * FROM resources WHERE resource_type = 'marketplace'"
@@ -627,18 +713,40 @@ def marketplace():
 
     if category_filter and category_filter != 'All':
         query += " AND (category_name LIKE ? OR title LIKE ?)"
-        params.extend([f"%{category_filter}%", f"%{category_filter}%"])
+        params.extend([
+            f"%{category_filter}%",
+            f"%{category_filter}%"
+        ])
 
     if search_query:
         query += " AND (title LIKE ? OR description LIKE ? OR provider LIKE ?)"
-        params.extend([f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"])
+        params.extend([
+            f"%{search_query}%",
+            f"%{search_query}%",
+            f"%{search_query}%"
+        ])
 
     query += " ORDER BY views_count DESC"
+
     market_list = conn.execute(query, params).fetchall()
     ratings_map = get_resource_ratings(conn)
     conn.close()
 
-    categories = ['All', 'Sell Crops', 'Buy Seeds', 'Buy Farming Equipment', 'Fertilizers', 'Agricultural Market Prices', 'Government Marketplaces']
+    # Fetch government mandi prices
+    mandi_prices, mandi_is_live, mandi_message = get_mandi_prices(
+        limit=100,
+        state=mandi_state
+    )
+
+    categories = [
+        'All',
+        'Sell Crops',
+        'Buy Seeds',
+        'Buy Farming Equipment',
+        'Fertilizers',
+        'Agricultural Market Prices',
+        'Government Marketplaces'
+    ]
 
     return render_template(
         'marketplace.html',
@@ -646,10 +754,13 @@ def marketplace():
         categories=categories,
         active_cat=category_filter,
         search_query=search_query,
-        mandi_prices=SAMPLE_MANDI_PRICES,
-        ratings_map=ratings_map
+        mandi_prices=mandi_prices,
+        mandi_is_live=mandi_is_live,
+        mandi_message=mandi_message,
+        ratings_map=ratings_map,
+        mandi_state=mandi_state,
     )
-
+    
 @app.route('/community', methods=['GET', 'POST'])
 def community():
     conn = get_db()

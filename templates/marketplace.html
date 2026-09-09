@@ -20,8 +20,21 @@
       <div style="display: flex; align-items: center; gap: 0.75rem;">
         <i class="fa-solid fa-chart-line" style="font-size: 1.4rem; color: #fef08a;"></i>
         <div>
-          <h3 style="font-size: 1.15rem; font-weight: 700;">APMC Mandi Spot Rate Indicator (Sample & Indicative Rates)</h3>
-          <span style="font-size: 0.8rem; color: #d1fae5;">Sample market quotes for reference. For live daily APMC auction prices, check official Agmarknet portal.</span>
+          <h3 style="font-size: 1.15rem; font-weight: 700;">
+  Government Mandi Daily Prices
+</h3>
+
+{% if mandi_is_live %}
+  <span style="font-size: 0.8rem; color: #d1fae5;">
+    <i class="fa-solid fa-circle-check"></i>
+    Daily mandi prices from Government of India data.gov.in
+  </span>
+{% else %}
+  <span style="font-size: 0.8rem; color: #fef3c7;">
+    <i class="fa-solid fa-triangle-exclamation"></i>
+    {{ mandi_message }}
+  </span>
+{% endif %}
         </div>
       </div>
       <a href="https://agmarknet.gov.in/" target="_blank" class="btn btn-sm btn-accent" rel="noopener noreferrer">
@@ -29,37 +42,116 @@
       </a>
     </div>
 
+
+
+    <!-- MANDI STATE FILTER -->
+<div style="padding: 1rem 1.5rem; background: var(--cream-light); border-bottom: 1px solid var(--border-color);">
+  <form action="{{ url_for('marketplace') }}" method="GET"
+        style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+
+    <label for="mandi_state" style="font-weight: 700;">
+      <i class="fa-solid fa-location-dot"></i>
+      Select State:
+    </label>
+
+    <select
+      id="mandi_state"
+      name="mandi_state"
+      onchange="this.form.submit()"
+      style="padding: 0.65rem 1rem; border: 1px solid var(--border-color);
+             border-radius: 8px; background: white; min-width: 220px;">
+
+      <option value="">All States</option>
+
+      {% for state in indian_states %}
+        <option value="{{ state }}"
+          {% if mandi_state == state %}selected{% endif %}>
+          {{ state }}
+        </option>
+      {% endfor %}
+
+    </select>
+
+    {% if mandi_state %}
+      <span style="font-size: 0.85rem; color: var(--text-muted);">
+        Showing mandi prices for <strong>{{ mandi_state }}</strong>
+      </span>
+    {% endif %}
+
+  </form>
+</div>
+
     <div style="overflow-x: auto;">
       <table class="mandi-table">
-        <thead>
-          <tr>
-            <th>Commodity / Crop</th>
-            <th>Market Yard / APMC Mandi</th>
-            <th>Modal Price</th>
-            <th>Unit</th>
-            <th>Daily Trend</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for item in mandi_prices %}
-            <tr>
-              <td><strong>{{ item.crop }}</strong></td>
-              <td><i class="fa-solid fa-location-dot" style="color: var(--amber-warm);"></i> {{ item.mandi }}</td>
-              <td style="font-weight: 800; font-size: 1.05rem; color: var(--forest-dark);">₹ {{ item.price }}</td>
-              <td style="color: var(--text-muted);">{{ item.unit }}</td>
-              <td>
-                {% if item.trend == 'up' %}
-                  <span class="price-trend-up"><i class="fa-solid fa-arrow-trend-up"></i> {{ item.change }}</span>
-                {% elif item.trend == 'down' %}
-                  <span class="price-trend-down"><i class="fa-solid fa-arrow-trend-down"></i> {{ item.change }}</span>
-                {% else %}
-                  <span style="color: var(--text-muted);"><i class="fa-solid fa-minus"></i> Stable</span>
-                {% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+  <thead>
+    <tr>
+      <th>Commodity</th>
+      <th>Market / APMC</th>
+      <th>Min Price</th>
+      <th>Max Price</th>
+      <th>Modal Price</th>
+      <th>Arrival Date</th>
+    </tr>
+  </thead>
+
+  <tbody>
+    {% for item in mandi_prices %}
+      <tr class="mandi-row {% if loop.index > 10 %}mandi-hidden{% endif %}">
+        <td>
+          <strong>{{ item.crop }}</strong>
+
+          {% if item.variety %}
+            <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.25rem;">
+              {{ item.variety }}
+            </div>
+          {% endif %}
+        </td>
+
+        <td>
+          <i class="fa-solid fa-location-dot" style="color: var(--amber-warm);"></i>
+          {{ item.mandi }}
+
+          {% if item.state %}
+            <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.25rem;">
+              {{ item.district }}, {{ item.state }}
+            </div>
+          {% endif %}
+        </td>
+
+        <td>
+          ₹ {{ "{:,.0f}".format(item.min_price or 0) }}
+        </td>
+
+        <td>
+          ₹ {{ "{:,.0f}".format(item.max_price or 0) }}
+        </td>
+
+        <td style="font-weight: 800; font-size: 1.05rem; color: var(--forest-dark);">
+          ₹ {{ "{:,.0f}".format(item.price or 0) }}
+          <div style="font-size: 0.72rem; color: var(--text-muted); font-weight: 500;">
+            per quintal
+          </div>
+        </td>
+
+        <td style="color: var(--text-muted);">
+          {{ item.arrival_date }}
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if mandi_prices|length > 10 %}
+  <div style="text-align: center; padding: 1rem;">
+    <button
+      type="button"
+      id="mandiExpandBtn"
+      class="btn btn-sm btn-accent"
+      onclick="toggleMandiRows()">
+      <i class="fa-solid fa-chevron-down"></i>
+      View More
+    </button>
+  </div>
+{% endif %}
     </div>
   </div>
 
@@ -142,4 +234,37 @@
   {% endif %}
 
 </div>
+
+<style>
+  .mandi-hidden {
+    display: none;
+  }
+</style>
+
+<script>
+  function toggleMandiRows() {
+    const rows = document.querySelectorAll('.mandi-row');
+    const button = document.getElementById('mandiExpandBtn');
+    const hiddenRows = document.querySelectorAll('.mandi-hidden');
+
+    if (hiddenRows.length > 0) {
+      rows.forEach(row => {
+        row.classList.remove('mandi-hidden');
+      });
+
+      button.innerHTML =
+        '<i class="fa-solid fa-chevron-up"></i> Show Less';
+    } else {
+      rows.forEach((row, index) => {
+        if (index >= 10) {
+          row.classList.add('mandi-hidden');
+        }
+      });
+
+      button.innerHTML =
+        '<i class="fa-solid fa-chevron-down"></i> View More';
+    }
+  }
+</script>
+
 {% endblock %}
