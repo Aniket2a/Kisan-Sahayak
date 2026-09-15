@@ -96,11 +96,11 @@ class KisanSahayakTestCase(unittest.TestCase):
 
     def test_05_farmer_dashboard_and_bookmarks(self):
         """Test bookmarking flow and user-specific dashboard."""
-        self.client.post('/login', data={'username_or_email': 'ramesh_kumar', 'password': 'farmer123'})
+        self.client.post('/login', data={'username_or_email': 'demo_farmer_1', 'password': 'DemoFarmer2026!'})
 
         dash_res = self.client.get('/dashboard')
         self.assertEqual(dash_res.status_code, 200)
-        self.assertIn(b'Welcome back, Ramesh Kumar!', dash_res.data)
+        self.assertIn(b'Welcome back, Demo Farmer One!', dash_res.data)
 
         bm_res = self.client.post('/api/bookmark/toggle', 
                                   data=json.dumps({'resource_id': 3}), 
@@ -116,7 +116,7 @@ class KisanSahayakTestCase(unittest.TestCase):
 
     def test_06_community_post_and_comment(self):
         """Test community Q&A, comments, and likes."""
-        self.client.post('/login', data={'username_or_email': 'ramesh_kumar', 'password': 'farmer123'})
+        self.client.post('/login', data={'username_or_email': 'demo_farmer_1', 'password': 'DemoFarmer2026!'})
 
         post_res = self.client.post('/community', data={
             'title': 'How to control fall armyworm in maize?',
@@ -133,7 +133,7 @@ class KisanSahayakTestCase(unittest.TestCase):
 
     def test_07_rating_and_feedback(self):
         """Test star rating and feedback submission."""
-        self.client.post('/login', data={'username_or_email': 'ramesh_kumar', 'password': 'farmer123'})
+        self.client.post('/login', data={'username_or_email': 'demo_farmer_1', 'password': 'DemoFarmer2026!'})
         
         fb_res = self.client.post('/api/rate-feedback', data={
             'resource_id': '1',
@@ -146,7 +146,7 @@ class KisanSahayakTestCase(unittest.TestCase):
     def test_08_admin_authorization_and_crud(self):
         """Test admin dashboard access, security against old credentials, and environment-based admin login."""
         # Non-admin farmer tries to access admin -> Denied
-        self.client.post('/login', data={'username_or_email': 'ramesh_kumar', 'password': 'farmer123'})
+        self.client.post('/login', data={'username_or_email': 'demo_farmer_1', 'password': 'DemoFarmer2026!'})
         admin_deny = self.client.get('/admin', follow_redirects=True)
         self.assertIn(b'Access denied', admin_deny.data)
 
@@ -188,8 +188,8 @@ class KisanSahayakTestCase(unittest.TestCase):
     def test_10_open_redirect_defense(self):
         """Verify login next parameter rejects external open redirects."""
         res = self.client.post('/login?next=https://evil.com', data={
-            'username_or_email': 'ramesh_kumar',
-            'password': 'farmer123'
+            'username_or_email': 'demo_farmer_1',
+            'password': 'DemoFarmer2026!'
         })
         self.assertNotEqual(res.location, 'https://evil.com')
 
@@ -200,7 +200,7 @@ class KisanSahayakTestCase(unittest.TestCase):
         self.assertEqual(res404.status_code, 404)
 
         # Login as farmer
-        self.client.post('/login', data={'username_or_email': 'ramesh_kumar', 'password': 'farmer123'})
+        self.client.post('/login', data={'username_or_email': 'demo_farmer_1', 'password': 'DemoFarmer2026!'})
 
         # Invalid resource ID format
         res400 = self.client.post('/api/bookmark/toggle',
