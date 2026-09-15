@@ -230,10 +230,10 @@ def seed_data(conn, force_reset=False):
 
     # 1. Seed Demo Farmer Users (No hardcoded admin credentials)
     users_data = [
-        ('Ramesh Kumar', 'ramesh_kumar', 'ramesh.farmer@gmail.com', generate_password_hash('farmer123'), 'Punjab', 'Seeds & Crops', 'user'),
-        ('Sunita Devi', 'sunita_devi', 'sunita.devi@yahoo.com', generate_password_hash('farmer123'), 'Madhya Pradesh', 'Organic Farming', 'user'),
-        ('Balwinder Singh', 'balwinder_singh', 'balwinder@agrimail.in', generate_password_hash('farmer123'), 'Haryana', 'Farming Tools', 'user')
-    ]
+        ('Demo Farmer One', 'demo_farmer_1', 'demo.farmer1@example.com', generate_password_hash('DemoFarmer2026!'), 'Punjab', 'Seeds & Crops', 'user'),
+        ('Demo Farmer Two', 'demo_farmer_2', 'demo.farmer2@example.com', generate_password_hash('DemoFarmer2026!'), 'Madhya Pradesh', 'Organic Farming', 'user'),
+        ('Demo Farmer Three', 'demo_farmer_3', 'demo.farmer3@example.com', generate_password_hash('DemoFarmer2026!'), 'Haryana', 'Farming Tools', 'user')
+    ]   
     for u in users_data:
         existing = cursor.execute("SELECT id FROM users WHERE username = ?", (u[1],)).fetchone()
         if not existing:
