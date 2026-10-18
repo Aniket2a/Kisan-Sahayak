@@ -1,6 +1,6 @@
 {
-  "name": "Kisan Sahayak",
-  "description": "Smart Agriculture Resources & Farmer Support Platform for Indian Farmers - access verified government schemes, crops, farming tools, loans, knowledge guides, weather advisories, mandi marketplace, and farmer community.",
+  "name": "Remix Kisan-Sahayak",
+  "description": "Imported from GitHub",
   "permissions": [],
   "capabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
