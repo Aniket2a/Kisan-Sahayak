@@ -147,7 +147,10 @@ export const ResourceCard: React.FC<ResourceCardProps> = ({ resource }) => {
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              onClick={() => openResourceDetails(loc)}
+              onClick={(e) => {
+                e.stopPropagation();
+                openResourceDetails(resource);
+              }}
             >
               <span>{t('btn_details')}</span>
               <i className="fa-solid fa-arrow-right" style={{ fontSize: '0.75rem' }}></i>

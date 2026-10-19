@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { ResourceType } from '../types';
 
@@ -42,6 +42,29 @@ export const AdminResourceModal: React.FC = () => {
     }
   }, [adminModalResource]);
 
+  const backdropMouseDownRef = useRef(false);
+
+  // Lock background scroll and handle Escape key while admin modal is open
+  useEffect(() => {
+    if (isAdminModalOpen) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          closeAdminModal();
+        }
+      };
+
+      window.addEventListener('keydown', handleKeyDown);
+
+      return () => {
+        document.body.style.overflow = originalOverflow;
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }
+  }, [isAdminModalOpen, closeAdminModal]);
+
   if (!isAdminModalOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -79,9 +102,34 @@ export const AdminResourceModal: React.FC = () => {
     closeAdminModal();
   };
 
+  const handleBackdropMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) {
+      backdropMouseDownRef.current = true;
+    } else {
+      backdropMouseDownRef.current = false;
+    }
+  };
+
+  const handleBackdropTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) {
+      backdropMouseDownRef.current = true;
+    } else {
+      backdropMouseDownRef.current = false;
+    }
+  };
+
+  const handleBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget && backdropMouseDownRef.current) {
+      closeAdminModal();
+    }
+    backdropMouseDownRef.current = false;
+  };
+
   return (
     <div
-      className="modal-backdrop"
+      className="modal-backdrop show"
+      role="dialog"
+      aria-modal="true"
       style={{
         position: 'fixed',
         inset: 0,
@@ -94,7 +142,9 @@ export const AdminResourceModal: React.FC = () => {
         padding: '1rem',
         animation: 'pageFadeIn 0.2s ease-out'
       }}
-      onClick={closeAdminModal}
+      onMouseDown={handleBackdropMouseDown}
+      onTouchStart={handleBackdropTouchStart}
+      onClick={handleBackdropClick}
     >
       <div
         className="modal-content"
@@ -108,6 +158,8 @@ export const AdminResourceModal: React.FC = () => {
           boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
           padding: '1.75rem'
         }}
+        onMouseDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-light)', paddingBottom: '0.75rem' }}>
@@ -121,7 +173,10 @@ export const AdminResourceModal: React.FC = () => {
           </div>
           <button
             type="button"
-            onClick={closeAdminModal}
+            onClick={(e) => {
+              e.stopPropagation();
+              closeAdminModal();
+            }}
             style={{
               background: 'none',
               border: 'none',

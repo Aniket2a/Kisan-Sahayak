@@ -276,11 +276,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Modal helpers
   const openResourceDetails = (resource: Resource) => {
-    // Increment view count
+    const targetId = resource.id;
+    let updatedViews = (resource.views_count || 0) + 1;
+
     setResources(prev =>
-      prev.map(r => (r.id === resource.id ? { ...r, views_count: (r.views_count || 0) + 1 } : r))
+      prev.map(r => {
+        if (r.id === targetId) {
+          updatedViews = (r.views_count || 0) + 1;
+          return { ...r, views_count: updatedViews };
+        }
+        return r;
+      })
     );
-    setSelectedResource({ ...resource, views_count: (resource.views_count || 0) + 1 });
+
+    setSelectedResource({ ...resource, views_count: updatedViews });
     setIsDetailModalOpen(true);
   };
 

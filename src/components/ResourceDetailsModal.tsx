@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 
 export const ResourceDetailsModal: React.FC = () => {
@@ -19,6 +19,36 @@ export const ResourceDetailsModal: React.FC = () => {
 
   const [rating, setRating] = useState<number>(5);
   const [comment, setComment] = useState<string>('');
+  const backdropMouseDownRef = useRef(false);
+
+  // Reset rating and comment when a new resource is opened
+  useEffect(() => {
+    if (selectedResource) {
+      setRating(5);
+      setComment('');
+    }
+  }, [selectedResource?.id]);
+
+  // Lock background scroll and handle Escape key while modal is open
+  useEffect(() => {
+    if (isDetailModalOpen) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          closeResourceDetails();
+        }
+      };
+
+      window.addEventListener('keydown', handleKeyDown);
+
+      return () => {
+        document.body.style.overflow = originalOverflow;
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }
+  }, [isDetailModalOpen, closeResourceDetails]);
 
   if (!isDetailModalOpen || !selectedResource) return null;
 
@@ -34,9 +64,37 @@ export const ResourceDetailsModal: React.FC = () => {
     setComment('');
   };
 
+  const handleBackdropMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) {
+      backdropMouseDownRef.current = true;
+    } else {
+      backdropMouseDownRef.current = false;
+    }
+  };
+
+  const handleBackdropTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) {
+      backdropMouseDownRef.current = true;
+    } else {
+      backdropMouseDownRef.current = false;
+    }
+  };
+
+  const handleBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    // Only close if mousedown/touchstart initiated directly on the backdrop itself
+    // AND the click ended directly on the backdrop itself
+    if (e.target === e.currentTarget && backdropMouseDownRef.current) {
+      closeResourceDetails();
+    }
+    backdropMouseDownRef.current = false;
+  };
+
   return (
     <div
-      className="modal-backdrop"
+      className="modal-backdrop show"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="modal-res-title"
       style={{
         position: 'fixed',
         inset: 0,
@@ -49,7 +107,9 @@ export const ResourceDetailsModal: React.FC = () => {
         padding: '1rem',
         animation: 'pageFadeIn 0.2s ease-out'
       }}
-      onClick={closeResourceDetails}
+      onMouseDown={handleBackdropMouseDown}
+      onTouchStart={handleBackdropTouchStart}
+      onClick={handleBackdropClick}
     >
       <div
         className="modal-content"
@@ -63,6 +123,8 @@ export const ResourceDetailsModal: React.FC = () => {
           boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
           position: 'relative'
         }}
+        onMouseDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header Image & Close Button */}
@@ -82,7 +144,10 @@ export const ResourceDetailsModal: React.FC = () => {
           />
           <button
             type="button"
-            onClick={closeResourceDetails}
+            onClick={(e) => {
+              e.stopPropagation();
+              closeResourceDetails();
+            }}
             style={{
               position: 'absolute',
               top: '1rem',
@@ -101,6 +166,7 @@ export const ResourceDetailsModal: React.FC = () => {
               transition: 'background-color 0.2s ease'
             }}
             title={t('btn_close')}
+            aria-label={t('btn_close')}
           >
             <i className="fa-solid fa-xmark"></i>
           </button>
@@ -125,7 +191,7 @@ export const ResourceDetailsModal: React.FC = () => {
         <div style={{ padding: '1.75rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
             <div>
-              <h2 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--forest-dark)', marginBottom: '0.3rem' }}>
+              <h2 id="modal-res-title" style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--forest-dark)', marginBottom: '0.3rem' }}>
                 {loc.title}
               </h2>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
@@ -145,7 +211,10 @@ export const ResourceDetailsModal: React.FC = () => {
               <button
                 type="button"
                 className={`btn btn-secondary ${bookmarked ? 'saved' : ''}`}
-                onClick={() => toggleBookmark(loc.id)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleBookmark(loc.id);
+                }}
                 style={{ color: bookmarked ? 'var(--amber-warm)' : undefined }}
               >
                 <i className={`${bookmarked ? 'fa-solid' : 'fa-regular'} fa-bookmark`}></i>
@@ -158,6 +227,7 @@ export const ResourceDetailsModal: React.FC = () => {
                   target="_blank"
                   rel="noopener noreferrer"
                   className="btn btn-primary"
+                  onClick={(e) => e.stopPropagation()}
                 >
                   <i className="fa-solid fa-arrow-up-right-from-square"></i>
                   <span>{t('modal_official_portal')}</span>
