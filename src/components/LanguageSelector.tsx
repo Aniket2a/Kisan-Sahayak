@@ -10,6 +10,8 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({ isMobile = f
   const { language, setLanguage, t, showToast } = useApp();
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -44,6 +46,46 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({ isMobile = f
 
   const currentOption = SUPPORTED_LANGUAGES.find(l => l.code === language) || SUPPORTED_LANGUAGES[0];
 
+  const handleBtnKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+      if (!isOpen) {
+        e.preventDefault();
+        setIsOpen(true);
+        setTimeout(() => {
+          menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+        }, 50);
+      }
+    } else if (e.key === 'Escape') {
+      setIsOpen(false);
+    }
+  };
+
+  const handleMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      setIsOpen(false);
+      buttonRef.current?.focus();
+      return;
+    }
+
+    const items = menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]');
+    if (!items || items.length === 0) return;
+    const itemsArray = Array.from(items);
+    const currentIndex = itemsArray.indexOf(document.activeElement as HTMLElement);
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const nextIndex = currentIndex < itemsArray.length - 1 ? currentIndex + 1 : 0;
+      itemsArray[nextIndex]?.focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const prevIndex = currentIndex > 0 ? currentIndex - 1 : itemsArray.length - 1;
+      itemsArray[prevIndex]?.focus();
+    } else if (e.key === 'Tab') {
+      setIsOpen(false);
+    }
+  };
+
   if (isMobile) {
     return (
       <div style={{ marginBottom: '1.25rem', paddingBottom: '1rem', borderBottom: '1px solid var(--border-light)' }}>
@@ -75,35 +117,27 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({ isMobile = f
   }
 
   return (
-    <div ref={containerRef} style={{ position: 'relative' }}>
+    <div ref={containerRef} className="lang-selector-wrapper" style={{ position: 'relative' }}>
       <button
+        ref={buttonRef}
         type="button"
+        id="languageSelectorBtn"
         onClick={() => setIsOpen(!isOpen)}
-        className="btn btn-secondary btn-sm"
+        onKeyDown={handleBtnKeyDown}
+        className={`btn btn-secondary btn-sm lang-selector-btn ${isOpen ? 'active' : ''}`}
         aria-label="Select Language"
         aria-haspopup="true"
         aria-expanded={isOpen}
+        aria-controls="languageDropdownMenu"
         title={`${t('lang_select')}: ${currentOption.nativeName}`}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.4rem',
-          padding: '0.4rem 0.75rem',
-          borderRadius: 'var(--radius-full)',
-          borderColor: isOpen ? 'var(--primary-green)' : undefined,
-          background: isOpen ? 'var(--mint-bg)' : undefined
-        }}
       >
         <i className="fa-solid fa-globe" style={{ color: 'var(--primary-green)' }}></i>
-        <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--forest-dark)' }}>
+        <span className="lang-name-label">
           {currentOption.nativeName}
         </span>
         <i
-          className="fa-solid fa-chevron-down"
+          className="fa-solid fa-chevron-down lang-chevron"
           style={{
-            fontSize: '0.65rem',
-            color: 'var(--text-muted)',
-            transition: 'transform 0.2s ease',
             transform: isOpen ? 'rotate(180deg)' : 'none'
           }}
         ></i>
@@ -111,8 +145,12 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({ isMobile = f
 
       {isOpen && (
         <div
+          id="languageDropdownMenu"
+          ref={menuRef}
           role="menu"
           aria-orientation="vertical"
+          aria-labelledby="languageSelectorBtn"
+          onKeyDown={handleMenuKeyDown}
           style={{
             position: 'absolute',
             top: 'calc(100% + 6px)',
@@ -123,7 +161,7 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({ isMobile = f
             border: '1px solid var(--border-light)',
             padding: '0.4rem',
             minWidth: '155px',
-            zIndex: 1000,
+            zIndex: 1100,
             animation: 'pageFadeIn 0.15s ease-out'
           }}
         >
@@ -134,6 +172,7 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({ isMobile = f
                 key={lang.code}
                 type="button"
                 role="menuitem"
+                tabIndex={0}
                 onClick={() => handleSelectLanguage(lang.code)}
                 style={{
                   width: '100%',
