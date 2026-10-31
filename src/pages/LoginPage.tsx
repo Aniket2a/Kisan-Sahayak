@@ -6,24 +6,23 @@ export const LoginPage: React.FC = () => {
   const [usernameOrEmail, setUsernameOrEmail] = useState('');
   const [password, setPassword] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!usernameOrEmail.trim()) {
       showToast(t('auth_enter_uname'), 'warning');
       return;
     }
 
-    const res = login(usernameOrEmail, password);
+    const res = await login(usernameOrEmail, password);
     if (res.success) {
-      navigate('/dashboard');
+      if (res.role === 'admin') {
+        navigate('/admin');
+      } else {
+        navigate('/dashboard');
+      }
     } else {
       showToast(res.message, 'danger');
     }
-  };
-
-  const fillCredentials = (u: string, p: string) => {
-    setUsernameOrEmail(u);
-    setPassword(p);
   };
 
   return (
@@ -90,32 +89,6 @@ export const LoginPage: React.FC = () => {
           </button>
         </form>
 
-        {/* Quick Demo Credentials Fill */}
-        <div style={{ marginTop: '1.75rem', paddingTop: '1.25rem', borderTop: '1px solid var(--border-light)' }}>
-          <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.6rem', textAlign: 'center' }}>
-            {t('login_demo_heading')}
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-            <button
-              type="button"
-              onClick={() => fillCredentials('demo_farmer_1', 'farmer123')}
-              className="btn btn-secondary btn-sm"
-              style={{ justifyContent: 'space-between', fontSize: '0.8rem', padding: '0.4rem 0.75rem' }}
-            >
-              <span><i className="fa-solid fa-user"></i> Ramesh Kumar (Farmer)</span>
-              <span className="section-badge" style={{ fontSize: '0.7rem', padding: '0.1rem 0.4rem' }}>{t('login_autofill')}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => fillCredentials('admin_kisan', 'admin123')}
-              className="btn btn-secondary btn-sm"
-              style={{ justifyContent: 'space-between', fontSize: '0.8rem', padding: '0.4rem 0.75rem' }}
-            >
-              <span><i className="fa-solid fa-shield-halved"></i> Dr. M. S. Swaminathan (Admin)</span>
-              <span className="section-badge" style={{ fontSize: '0.7rem', padding: '0.1rem 0.4rem' }}>{t('login_autofill')}</span>
-            </button>
-          </div>
-        </div>
 
         <div style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
           {t('login_no_account')}{' '}

@@ -64,7 +64,7 @@ interface AppContextType {
   deleteFeedback: (feedbackId: number) => void;
 
   // Auth & Profile
-  login: (usernameOrEmail: string, password?: string) => { success: boolean; message: string };
+  login: (usernameOrEmail: string, password?: string) => Promise<{ success: boolean; message: string; role?: string }>;
   register: (userData: { full_name: string; username: string; email: string; password?: string; state: string; preferred_category: string }) => { success: boolean; message: string };
   logout: () => void;
   updateProfile: (updates: { full_name: string; email: string; state: string; preferred_category: string; new_password?: string }) => { success: boolean; message: string };
@@ -107,22 +107,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const tc = (category: string) => translateCategory(category, language);
 
   // LocalStorage state persistence
+  // LocalStorage state persistence
   const [users, setUsers] = useState<User[]>(() => {
     const saved = localStorage.getItem('kisan_users');
-    return saved ? JSON.parse(saved) : INITIAL_USERS;
+    let loadedUsers: User[] = saved ? JSON.parse(saved) : INITIAL_USERS;
+    // Strip any hardcoded admin or escalated roles from frontend storage
+    return loadedUsers
+      .filter(u => u.username.toLowerCase() !== 'admin')
+      .map(u => ({ ...u, role: 'user' as UserRole }));
   });
 
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const savedUser = localStorage.getItem('kisan_current_user');
     if (savedUser) {
       try {
-        return JSON.parse(savedUser);
+        const parsed = JSON.parse(savedUser);
+        if (parsed && parsed.role === 'admin') {
+          const token = sessionStorage.getItem('kisan_admin_token');
+          if (!token) return null;
+        }
+        return parsed && parsed.id ? parsed : null;
       } catch {
         return null;
       }
     }
-    // Default to Demo Farmer One for immediate rich interactive experience
-    return INITIAL_USERS[0];
+    return null;
   });
 
   const [resources, setResources] = useState<Resource[]>(() => {
@@ -188,6 +197,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     document.documentElement.lang = language;
   }, [language]);
+
+  // Verify Admin token with backend on startup
+  useEffect(() => {
+    if (currentUser && currentUser.role === 'admin') {
+      const token = sessionStorage.getItem('kisan_admin_token');
+      if (!token) {
+        setCurrentUser(null);
+        return;
+      }
+      fetch('/api/auth/verify-session', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (!data || !data.valid || data.role !== 'admin') {
+            sessionStorage.removeItem('kisan_admin_token');
+            setCurrentUser(null);
+          }
+        })
+        .catch(() => {
+          sessionStorage.removeItem('kisan_admin_token');
+          setCurrentUser(null);
+        });
+    }
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('kisan_users', JSON.stringify(users));
@@ -401,10 +435,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Auth
-  const login = (usernameOrEmail: string, password?: string) => {
-    const normalized = usernameOrEmail.trim().toLowerCase();
+  const login = async (usernameOrEmail: string, password?: string): Promise<{ success: boolean; message: string; role?: string }> => {
+    const trimmedInput = usernameOrEmail.trim();
+    const normalized = trimmedInput.toLowerCase();
+
+    // 1. First attempt secure backend admin authentication
+    try {
+      const resp = await fetch('/api/auth/admin-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: trimmedInput, password: password || '' })
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.success && data.token && data.user) {
+          sessionStorage.setItem('kisan_admin_token', data.token);
+          setCurrentUser(data.user);
+          showToast(`${t('auth_welcome_back')}, ${data.user.full_name}!`, 'success');
+          return { success: true, message: t('auth_login_success'), role: 'admin' };
+        }
+      } else if (resp.status === 401) {
+        const errData = await resp.json().catch(() => ({}));
+        // If the submitted username was an attempt to log in as the configured Admin account,
+        // stop here with invalid credentials (do not fall back to farmer).
+        if (errData.isAdminAttempt) {
+          return { success: false, message: t('auth_invalid_creds') };
+        }
+      }
+    } catch {
+      // Backend request error
+    }
+
+    // 2. Farmer authentication via registered accounts
     const found = users.find(
-      u => u.username.toLowerCase() === normalized || u.email.toLowerCase() === normalized
+      u => (u.username.toLowerCase() === normalized || u.email.toLowerCase() === normalized)
     );
 
     if (!found) {
@@ -415,9 +480,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: t('auth_invalid_creds') };
     }
 
-    setCurrentUser(found);
-    showToast(`${t('auth_welcome_back')}, ${found.full_name}!`, 'success');
-    return { success: true, message: t('auth_login_success') };
+    // Farmers are strictly non-admin
+    sessionStorage.removeItem('kisan_admin_token');
+    const farmerUser: User = { ...found, role: 'user' };
+    setCurrentUser(farmerUser);
+    showToast(`${t('auth_welcome_back')}, ${farmerUser.full_name}!`, 'success');
+    return { success: true, message: t('auth_login_success'), role: 'user' };
   };
 
   const register = (userData: {
@@ -454,6 +522,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = () => {
+    sessionStorage.removeItem('kisan_admin_token');
+    fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     setCurrentUser(null);
     showToast(t('auth_logout_msg'), 'info');
     navigate('/');
@@ -604,23 +674,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Your comment was added!', 'success');
   };
 
-  // User Management
-  const toggleUserRole = (userId: number) => {
-    if (currentUser && currentUser.id === userId) {
-      showToast('Cannot change your own role.', 'warning');
-      return;
-    }
-
-    setUsers(prev =>
-      prev.map(u => {
-        if (u.id === userId) {
-          const newRole: UserRole = u.role === 'admin' ? 'user' : 'admin';
-          showToast(`User role changed to ${newRole}.`, 'success');
-          return { ...u, role: newRole };
-        }
-        return u;
-      })
-    );
+  // User Management (Role escalation prevented)
+  const toggleUserRole = (_userId: number) => {
+    showToast('Role escalation is disabled. Only the private server-configured Admin account possesses administrator privileges.', 'warning');
   };
 
   const deleteUser = (userId: number) => {

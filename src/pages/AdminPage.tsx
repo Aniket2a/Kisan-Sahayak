@@ -27,8 +27,36 @@ export const AdminPage: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'resources' | 'users' | 'community' | 'feedback'>('resources');
   const [resourceFilter, setResourceFilter] = useState('');
+  const [isBackendVerified, setIsBackendVerified] = useState<boolean | null>(null);
 
-  if (!currentUser || currentUser.role !== 'admin') {
+  React.useEffect(() => {
+    let active = true;
+    const token = sessionStorage.getItem('kisan_admin_token');
+
+    if (!currentUser || currentUser.role !== 'admin' || !token) {
+      setIsBackendVerified(false);
+      return;
+    }
+
+    fetch('/api/auth/verify-session', {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (active) {
+          setIsBackendVerified(Boolean(data && data.valid && data.role === 'admin'));
+        }
+      })
+      .catch(() => {
+        if (active) setIsBackendVerified(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [currentUser]);
+
+  if (!currentUser || currentUser.role !== 'admin' || isBackendVerified === false) {
     return (
       <div className="container" style={{ paddingTop: '5rem', paddingBottom: '5rem', textAlign: 'center' }}>
         <div style={{ maxWidth: '480px', margin: '0 auto', background: '#fff', padding: '2.5rem', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-md)' }}>
@@ -42,6 +70,17 @@ export const AdminPage: React.FC = () => {
           <button onClick={() => navigate('/login')} className="btn btn-primary">
             <i className="fa-solid fa-arrow-right-to-bracket"></i> {t('admin_login_btn')}
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (isBackendVerified === null) {
+    return (
+      <div className="container" style={{ paddingTop: '5rem', paddingBottom: '5rem', textAlign: 'center' }}>
+        <div style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>
+          <i className="fa-solid fa-circle-notch fa-spin" style={{ marginRight: '0.5rem', color: 'var(--primary-green)' }}></i>
+          Verifying security credentials...
         </div>
       </div>
     );

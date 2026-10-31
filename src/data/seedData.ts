@@ -72,17 +72,6 @@ export const INITIAL_USERS: User[] = [
     preferred_category: 'Farming Tools',
     role: 'user',
     created_at: '2026-02-18T14:45:00Z'
-  },
-  {
-    id: 4,
-    full_name: 'Admin Officer',
-    username: 'admin',
-    email: 'admin@kisansahayak.in',
-    password: 'admin',
-    state: 'New Delhi',
-    preferred_category: 'Government Schemes',
-    role: 'admin',
-    created_at: '2026-01-01T00:00:00Z'
   }
 ];
 

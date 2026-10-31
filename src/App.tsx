@@ -26,6 +26,11 @@ import { RegisterPage } from './pages/RegisterPage';
 export const App: React.FC = () => {
   const { currentRoute } = useApp();
 
+  // Scroll to top on route change
+  React.useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [currentRoute]);
+
   const renderCurrentPage = () => {
     switch (currentRoute) {
       case '/':
@@ -64,9 +69,9 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '100%' }}>
       <Header />
-      <main style={{ flex: 1 }}>
+      <main style={{ flex: 1, width: '100%', minWidth: 0 }}>
         {renderCurrentPage()}
       </main>
       <Footer />

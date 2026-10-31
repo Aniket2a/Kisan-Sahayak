@@ -3,6 +3,8 @@ __pycache__/
 .venv/
 venv/
 .env
+.env.local
+.env.*.local
 
 # Local application data
 # Never commit the SQLite database because it may contain user-generated/private data.
