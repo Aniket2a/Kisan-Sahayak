@@ -81,7 +81,20 @@ function verifyAdminPassword(submittedPassword: string, storedHashOrPassword: st
 
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+  
+  let PORT = 3000;
+  const portIdx = process.argv.indexOf('--port');
+  if (portIdx !== -1 && process.argv[portIdx + 1]) {
+    PORT = parseInt(process.argv[portIdx + 1], 10) || 3000;
+  } else if (process.env.NODE_ENV === 'production' && process.env.PORT) {
+    PORT = parseInt(process.env.PORT, 10) || 3000;
+  }
+
+  let HOST = '0.0.0.0';
+  const hostIdx = process.argv.indexOf('--host');
+  if (hostIdx !== -1 && process.argv[hostIdx + 1] && !process.argv[hostIdx + 1].startsWith('-')) {
+    HOST = process.argv[hostIdx + 1];
+  }
 
   app.use(express.json());
 
@@ -262,14 +275,18 @@ async function startServer() {
     });
   } else {
     const vite = await createViteServer({
-      server: { middlewareMode: true, host: '0.0.0.0' },
+      server: {
+        middlewareMode: true,
+        host: HOST,
+        hmr: false
+      },
       appType: 'spa'
     });
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Kisan Sahayak] Full-stack application running at http://0.0.0.0:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`[Kisan Sahayak] Full-stack application running at http://${HOST}:${PORT}`);
   });
 }
 
