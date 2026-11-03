@@ -314,9 +314,14 @@ async function startServer() {
   // Admin user directory backed by Supabase Auth and profiles.
   app.get('/api/admin/users', authenticateAdminToken, asyncAdmin(async (_req, res) => {
     const client = getAdminSupabase();
-    const { data: authData, error: authError } = await client.auth.admin.listUsers({ page: 1, perPage: 1000 });
-    if (authError) return res.status(502).json({ error: authError.message });
-    const authUsers = authData.users || [];
+    const authUsers: any[] = [];
+    for (let page = 1; page <= 100; page += 1) {
+      const { data: authData, error: authError } = await client.auth.admin.listUsers({ page, perPage: 1000 });
+      if (authError) return res.status(502).json({ error: authError.message });
+      const batch = authData.users || [];
+      authUsers.push(...batch);
+      if (batch.length < 1000) break;
+    }
     const ids = authUsers.map(user => user.id);
     const { data: profiles, error: profileError } = ids.length
       ? await client.from('profiles').select('id, username, full_name, state, preferred_category, role, created_at').in('id', ids)
