@@ -326,68 +326,56 @@ BEGIN
     END IF;
   END IF;
 
-  -- 0.4 Validate existing functions using exact function signatures
+  -- 0.4 Validate existing functions using exact function signatures, security definer flag, and return types
   IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'admin_set_user_role' AND pronamespace = 'public'::regnamespace) THEN
-    IF to_regprocedure('public.admin_set_user_role(uuid, text)') IS NULL THEN
-      RAISE EXCEPTION 'Preflight Abort: Function admin_set_user_role exists with incompatible signature.';
+    IF to_regprocedure('public.admin_set_user_role(uuid, text)') IS NULL OR NOT EXISTS (
+      SELECT 1 FROM pg_proc WHERE oid = to_regprocedure('public.admin_set_user_role(uuid, text)')
+        AND prosecdef = true AND prorettype = 'void'::regtype
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Function admin_set_user_role exists with incompatible signature, security, or return type.';
     END IF;
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_increment_resource_view' AND pronamespace = 'public'::regnamespace) THEN
-    IF to_regprocedure('public.fn_increment_resource_view(bigint)') IS NULL THEN
-      RAISE EXCEPTION 'Preflight Abort: Function fn_increment_resource_view exists with incompatible signature.';
+    IF to_regprocedure('public.fn_increment_resource_view(bigint)') IS NULL OR NOT EXISTS (
+      SELECT 1 FROM pg_proc WHERE oid = to_regprocedure('public.fn_increment_resource_view(bigint)')
+        AND prosecdef = true AND prorettype IN ('int4'::regtype, 'int8'::regtype)
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Function fn_increment_resource_view exists with incompatible signature, security, or return type.';
     END IF;
   END IF;
 
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_protect_profile_mutations' AND pronamespace = 'public'::regnamespace) THEN
-    IF to_regprocedure('public.fn_protect_profile_mutations()') IS NULL THEN
-      RAISE EXCEPTION 'Preflight Abort: Function fn_protect_profile_mutations exists with incompatible signature.';
-    END IF;
-  END IF;
+  -- Validate all trigger functions have signature (), prosecdef = true, prorettype = trigger
+  DO $chk$
+  DECLARE
+    v_fn text;
+    v_fns text[] := ARRAY[
+      'fn_protect_profile_mutations',
+      'fn_handle_new_auth_user',
+      'fn_stamp_feedback_author_snapshot',
+      'fn_protect_feedback_mutations',
+      'fn_stamp_post_author_snapshot',
+      'fn_protect_post_mutations',
+      'fn_stamp_comment_author_snapshot',
+      'fn_protect_comment_mutations'
+    ];
+  BEGIN
+    FOREACH v_fn IN ARRAY v_fns LOOP
+      IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = v_fn AND pronamespace = 'public'::regnamespace) THEN
+        IF to_regprocedure('public.' || v_fn || '()') IS NULL OR NOT EXISTS (
+          SELECT 1 FROM pg_proc WHERE oid = to_regprocedure('public.' || v_fn || '()')
+            AND prosecdef = true AND prorettype = 'trigger'::regtype
+        ) THEN
+          RAISE EXCEPTION 'Preflight Abort: Function % exists with incompatible signature, security, or return type.', v_fn;
+        END IF;
+      END IF;
+    END LOOP;
+  END $chk$;
 
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_handle_new_auth_user' AND pronamespace = 'public'::regnamespace) THEN
-    IF to_regprocedure('public.fn_handle_new_auth_user()') IS NULL THEN
-      RAISE EXCEPTION 'Preflight Abort: Function fn_handle_new_auth_user exists with incompatible signature.';
-    END IF;
+  -- 0.5 Validate existing triggers reference expected trigger functions and relations
+  IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_profile_mutations' AND tgrelid <> to_regclass('public.profiles') AND NOT tgisinternal) THEN
+    RAISE EXCEPTION 'Preflight Abort: Trigger trg_protect_profile_mutations exists on unexpected relation.';
   END IF;
-
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_stamp_feedback_author_snapshot' AND pronamespace = 'public'::regnamespace) THEN
-    IF to_regprocedure('public.fn_stamp_feedback_author_snapshot()') IS NULL THEN
-      RAISE EXCEPTION 'Preflight Abort: Function fn_stamp_feedback_author_snapshot exists with incompatible signature.';
-    END IF;
-  END IF;
-
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_protect_feedback_mutations' AND pronamespace = 'public'::regnamespace) THEN
-    IF to_regprocedure('public.fn_protect_feedback_mutations()') IS NULL THEN
-      RAISE EXCEPTION 'Preflight Abort: Function fn_protect_feedback_mutations exists with incompatible signature.';
-    END IF;
-  END IF;
-
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_stamp_post_author_snapshot' AND pronamespace = 'public'::regnamespace) THEN
-    IF to_regprocedure('public.fn_stamp_post_author_snapshot()') IS NULL THEN
-      RAISE EXCEPTION 'Preflight Abort: Function fn_stamp_post_author_snapshot exists with incompatible signature.';
-    END IF;
-  END IF;
-
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_protect_post_mutations' AND pronamespace = 'public'::regnamespace) THEN
-    IF to_regprocedure('public.fn_protect_post_mutations()') IS NULL THEN
-      RAISE EXCEPTION 'Preflight Abort: Function fn_protect_post_mutations exists with incompatible signature.';
-    END IF;
-  END IF;
-
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_stamp_comment_author_snapshot' AND pronamespace = 'public'::regnamespace) THEN
-    IF to_regprocedure('public.fn_stamp_comment_author_snapshot()') IS NULL THEN
-      RAISE EXCEPTION 'Preflight Abort: Function fn_stamp_comment_author_snapshot exists with incompatible signature.';
-    END IF;
-  END IF;
-
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_protect_comment_mutations' AND pronamespace = 'public'::regnamespace) THEN
-    IF to_regprocedure('public.fn_protect_comment_mutations()') IS NULL THEN
-      RAISE EXCEPTION 'Preflight Abort: Function fn_protect_comment_mutations exists with incompatible signature.';
-    END IF;
-  END IF;
-
-  -- 0.5 Validate existing triggers reference expected trigger functions
   IF to_regclass('public.profiles') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_profile_mutations' AND tgrelid = to_regclass('public.profiles') AND NOT tgisinternal) THEN
     IF NOT EXISTS (
       SELECT 1 FROM pg_trigger 
@@ -399,6 +387,9 @@ BEGIN
     END IF;
   END IF;
 
+  IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_on_auth_user_created' AND tgrelid <> to_regclass('auth.users') AND NOT tgisinternal) THEN
+    RAISE EXCEPTION 'Preflight Abort: Trigger trg_on_auth_user_created exists on unexpected relation.';
+  END IF;
   IF to_regclass('auth.users') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_on_auth_user_created' AND tgrelid = to_regclass('auth.users') AND NOT tgisinternal) THEN
     IF NOT EXISTS (
       SELECT 1 FROM pg_trigger 
@@ -410,6 +401,9 @@ BEGIN
     END IF;
   END IF;
 
+  IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_stamp_feedback_author' AND tgrelid <> to_regclass('public.feedback') AND NOT tgisinternal) THEN
+    RAISE EXCEPTION 'Preflight Abort: Trigger trg_stamp_feedback_author exists on unexpected relation.';
+  END IF;
   IF to_regclass('public.feedback') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_stamp_feedback_author' AND tgrelid = to_regclass('public.feedback') AND NOT tgisinternal) THEN
     IF NOT EXISTS (
       SELECT 1 FROM pg_trigger 
@@ -421,6 +415,9 @@ BEGIN
     END IF;
   END IF;
 
+  IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_feedback_mutations' AND tgrelid <> to_regclass('public.feedback') AND NOT tgisinternal) THEN
+    RAISE EXCEPTION 'Preflight Abort: Trigger trg_protect_feedback_mutations exists on unexpected relation.';
+  END IF;
   IF to_regclass('public.feedback') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_feedback_mutations' AND tgrelid = to_regclass('public.feedback') AND NOT tgisinternal) THEN
     IF NOT EXISTS (
       SELECT 1 FROM pg_trigger 
@@ -432,6 +429,9 @@ BEGIN
     END IF;
   END IF;
 
+  IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_stamp_post_author' AND tgrelid <> to_regclass('public.community_posts') AND NOT tgisinternal) THEN
+    RAISE EXCEPTION 'Preflight Abort: Trigger trg_stamp_post_author exists on unexpected relation.';
+  END IF;
   IF to_regclass('public.community_posts') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_stamp_post_author' AND tgrelid = to_regclass('public.community_posts') AND NOT tgisinternal) THEN
     IF NOT EXISTS (
       SELECT 1 FROM pg_trigger 
@@ -443,6 +443,9 @@ BEGIN
     END IF;
   END IF;
 
+  IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_post_mutations' AND tgrelid <> to_regclass('public.community_posts') AND NOT tgisinternal) THEN
+    RAISE EXCEPTION 'Preflight Abort: Trigger trg_protect_post_mutations exists on unexpected relation.';
+  END IF;
   IF to_regclass('public.community_posts') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_post_mutations' AND tgrelid = to_regclass('public.community_posts') AND NOT tgisinternal) THEN
     IF NOT EXISTS (
       SELECT 1 FROM pg_trigger 
@@ -454,6 +457,9 @@ BEGIN
     END IF;
   END IF;
 
+  IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_stamp_comment_author' AND tgrelid <> to_regclass('public.comments') AND NOT tgisinternal) THEN
+    RAISE EXCEPTION 'Preflight Abort: Trigger trg_stamp_comment_author exists on unexpected relation.';
+  END IF;
   IF to_regclass('public.comments') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_stamp_comment_author' AND tgrelid = to_regclass('public.comments') AND NOT tgisinternal) THEN
     IF NOT EXISTS (
       SELECT 1 FROM pg_trigger 
@@ -465,6 +471,9 @@ BEGIN
     END IF;
   END IF;
 
+  IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_comment_mutations' AND tgrelid <> to_regclass('public.comments') AND NOT tgisinternal) THEN
+    RAISE EXCEPTION 'Preflight Abort: Trigger trg_protect_comment_mutations exists on unexpected relation.';
+  END IF;
   IF to_regclass('public.comments') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_comment_mutations' AND tgrelid = to_regclass('public.comments') AND NOT tgisinternal) THEN
     IF NOT EXISTS (
       SELECT 1 FROM pg_trigger 
@@ -476,12 +485,50 @@ BEGIN
     END IF;
   END IF;
 
+  -- 0.6 Validate existing view definitions, columns, and UUID privacy
+  IF EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema = 'public' AND table_name = 'v_community_posts') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_community_posts' AND column_name = 'id')
+       OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_community_posts' AND column_name = 'category')
+       OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_community_posts' AND column_name = 'is_author')
+       OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_community_posts' AND column_name = 'user_id') THEN
+      RAISE EXCEPTION 'Preflight Abort: View v_community_posts exists with incompatible columns or leaks user_id.';
+    END IF;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema = 'public' AND table_name = 'v_community_comments') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_community_comments' AND column_name = 'id')
+       OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_community_comments' AND column_name = 'post_id')
+       OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_community_comments' AND column_name = 'is_author')
+       OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_community_comments' AND column_name = 'user_id') THEN
+      RAISE EXCEPTION 'Preflight Abort: View v_community_comments exists with incompatible columns or leaks user_id.';
+    END IF;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema = 'public' AND table_name = 'v_resource_feedback') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_resource_feedback' AND column_name = 'id')
+       OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_resource_feedback' AND column_name = 'resource_id')
+       OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_resource_feedback' AND column_name = 'rating')
+       OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_resource_feedback' AND column_name = 'is_author')
+       OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_resource_feedback' AND column_name = 'user_id') THEN
+      RAISE EXCEPTION 'Preflight Abort: View v_resource_feedback exists with incompatible columns or leaks user_id.';
+    END IF;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema = 'public' AND table_name = 'v_resource_ratings') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_resource_ratings' AND column_name = 'resource_id')
+       OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_resource_ratings' AND column_name = 'avg_rating')
+       OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'v_resource_ratings' AND column_name = 'review_count') THEN
+      RAISE EXCEPTION 'Preflight Abort: View v_resource_ratings exists with incompatible columns.';
+    END IF;
+  END IF;
+
   RAISE NOTICE '>>> Step 0: Preflight validation successful.';
 END $$;
 
 -- ----------------------------------------------------------------------------
 -- 1. DYNAMIC PRE-STATE INVENTORY CAPTURE
--- Captured BEFORE creating _kisan_migration_manifest for accurate rollback ownership
+-- Captured BEFORE creating _kisan_migration_manifest for accurate rollback ownership.
+-- Accurately tracks all tables, views, functions, triggers, indexes, policies & sequences.
 -- ----------------------------------------------------------------------------
 CREATE TEMPORARY TABLE _kisan_inventory (
   obj_name text PRIMARY KEY,
@@ -491,7 +538,7 @@ CREATE TEMPORARY TABLE _kisan_inventory (
 
 INSERT INTO _kisan_inventory (obj_name, obj_type, pre_existed)
 VALUES
-  -- Tables
+  -- Tables (9 application tables + manifest)
   ('profiles', 'table', to_regclass('public.profiles') IS NOT NULL),
   ('categories', 'table', to_regclass('public.categories') IS NOT NULL),
   ('resources', 'table', to_regclass('public.resources') IS NOT NULL),
@@ -502,12 +549,14 @@ VALUES
   ('post_likes', 'table', to_regclass('public.post_likes') IS NOT NULL),
   ('audit_logs', 'table', to_regclass('public.audit_logs') IS NOT NULL),
   ('_kisan_migration_manifest', 'table', to_regclass('public._kisan_migration_manifest') IS NOT NULL),
-  -- Views
+
+  -- Views (4 views)
   ('v_community_posts', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_community_posts')),
   ('v_community_comments', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_community_comments')),
   ('v_resource_feedback', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_resource_feedback')),
   ('v_resource_ratings', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_resource_ratings')),
-  -- Functions (validated by exact procedure signature)
+
+  -- Functions (10 functions)
   ('fn_protect_profile_mutations', 'function', to_regprocedure('public.fn_protect_profile_mutations()') IS NOT NULL),
   ('admin_set_user_role', 'function', to_regprocedure('public.admin_set_user_role(uuid, text)') IS NOT NULL),
   ('fn_handle_new_auth_user', 'function', to_regprocedure('public.fn_handle_new_auth_user()') IS NOT NULL),
@@ -518,7 +567,8 @@ VALUES
   ('fn_stamp_comment_author_snapshot', 'function', to_regprocedure('public.fn_stamp_comment_author_snapshot()') IS NOT NULL),
   ('fn_protect_comment_mutations', 'function', to_regprocedure('public.fn_protect_comment_mutations()') IS NOT NULL),
   ('fn_increment_resource_view', 'function', to_regprocedure('public.fn_increment_resource_view(bigint)') IS NOT NULL),
-  -- Triggers (validated against trigger name, target table, and expected function)
+
+  -- Triggers (8 triggers)
   ('trg_protect_profile_mutations', 'trigger', EXISTS (
     SELECT 1 FROM pg_trigger t
     WHERE to_regclass('public.profiles') IS NOT NULL
@@ -582,7 +632,58 @@ VALUES
       AND t.tgname = 'trg_protect_comment_mutations'
       AND t.tgfoid = to_regproc('public.fn_protect_comment_mutations')
       AND NOT t.tgisinternal
-  ));
+  )),
+
+  -- Indexes (15 indexes)
+  ('idx_profiles_username_lower', 'index', to_regclass('public.idx_profiles_username_lower') IS NOT NULL),
+  ('idx_profiles_state', 'index', to_regclass('public.idx_profiles_state') IS NOT NULL),
+  ('idx_categories_slug', 'index', to_regclass('public.idx_categories_slug') IS NOT NULL),
+  ('idx_resources_category', 'index', to_regclass('public.idx_resources_category') IS NOT NULL),
+  ('idx_resources_type', 'index', to_regclass('public.idx_resources_type') IS NOT NULL),
+  ('idx_bookmarks_user_res', 'index', to_regclass('public.idx_bookmarks_user_res') IS NOT NULL),
+  ('idx_feedback_resource', 'index', to_regclass('public.idx_feedback_resource') IS NOT NULL),
+  ('idx_feedback_user', 'index', to_regclass('public.idx_feedback_user') IS NOT NULL),
+  ('idx_posts_user', 'index', to_regclass('public.idx_posts_user') IS NOT NULL),
+  ('idx_posts_category', 'index', to_regclass('public.idx_posts_category') IS NOT NULL),
+  ('idx_comments_post', 'index', to_regclass('public.idx_comments_post') IS NOT NULL),
+  ('idx_comments_user', 'index', to_regclass('public.idx_comments_user') IS NOT NULL),
+  ('idx_post_likes_user', 'index', to_regclass('public.idx_post_likes_user') IS NOT NULL),
+  ('idx_audit_logs_action', 'index', to_regclass('public.idx_audit_logs_action') IS NOT NULL),
+  ('idx_audit_logs_created', 'index', to_regclass('public.idx_audit_logs_created') IS NOT NULL),
+
+  -- Policies (23 policies)
+  ('profiles_select_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'profiles' AND policyname = 'profiles_select_own')),
+  ('profiles_update_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'profiles' AND policyname = 'profiles_update_own')),
+  ('categories_read_public', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'categories' AND policyname = 'categories_read_public')),
+  ('resources_read_public', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'resources' AND policyname = 'resources_read_public')),
+  ('bookmarks_select_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bookmarks' AND policyname = 'bookmarks_select_own')),
+  ('bookmarks_insert_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bookmarks' AND policyname = 'bookmarks_insert_own')),
+  ('bookmarks_delete_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bookmarks' AND policyname = 'bookmarks_delete_own')),
+  ('feedback_select_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'feedback' AND policyname = 'feedback_select_own')),
+  ('feedback_insert_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'feedback' AND policyname = 'feedback_insert_own')),
+  ('feedback_update_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'feedback' AND policyname = 'feedback_update_own')),
+  ('feedback_delete_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'feedback' AND policyname = 'feedback_delete_own')),
+  ('posts_select_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'community_posts' AND policyname = 'posts_select_own')),
+  ('posts_insert_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'community_posts' AND policyname = 'posts_insert_own')),
+  ('posts_update_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'community_posts' AND policyname = 'posts_update_own')),
+  ('posts_delete_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'community_posts' AND policyname = 'posts_delete_own')),
+  ('comments_select_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'comments' AND policyname = 'comments_select_own')),
+  ('comments_insert_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'comments' AND policyname = 'comments_insert_own')),
+  ('comments_update_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'comments' AND policyname = 'comments_update_own')),
+  ('comments_delete_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'comments' AND policyname = 'comments_delete_own')),
+  ('likes_select_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'post_likes' AND policyname = 'likes_select_own')),
+  ('likes_insert_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'post_likes' AND policyname = 'likes_insert_own')),
+  ('likes_delete_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'post_likes' AND policyname = 'likes_delete_own')),
+  ('manifest_admin_service_role_only', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = '_kisan_migration_manifest' AND policyname = 'manifest_admin_service_role_only')),
+
+  -- Sequences (6 sequences)
+  ('categories_id_seq', 'sequence', to_regclass('public.categories_id_seq') IS NOT NULL),
+  ('resources_id_seq', 'sequence', to_regclass('public.resources_id_seq') IS NOT NULL),
+  ('feedback_id_seq', 'sequence', to_regclass('public.feedback_id_seq') IS NOT NULL),
+  ('community_posts_id_seq', 'sequence', to_regclass('public.community_posts_id_seq') IS NOT NULL),
+  ('comments_id_seq', 'sequence', to_regclass('public.comments_id_seq') IS NOT NULL),
+  ('post_likes_id_seq', 'sequence', to_regclass('public.post_likes_id_seq') IS NOT NULL);
+
 
 -- Create _kisan_migration_manifest AFTER pre-state inventory is captured
 CREATE TABLE IF NOT EXISTS public._kisan_migration_manifest (
@@ -712,59 +813,61 @@ END $$;
 -- Function: Profile generation on auth.users registration (Validated by signature)
 DO $$
 BEGIN
-  IF to_regprocedure('public.fn_handle_new_auth_user()') IS NULL THEN
-    EXECUTE $func$
-      CREATE FUNCTION public.fn_handle_new_auth_user()
-      RETURNS trigger
-      LANGUAGE plpgsql
-      SECURITY DEFINER
-      SET search_path = public, pg_temp
-      AS $body$
-      DECLARE
-        v_raw_username text;
-        v_clean_username text;
-        v_candidate_username text;
-        v_full_name text;
-        v_state text;
-        v_pref_cat text;
-        v_retry_count integer := 0;
-        v_inserted boolean := false;
+  CREATE OR REPLACE FUNCTION public.fn_handle_new_auth_user()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+  AS $body$
+  DECLARE
+    v_raw_username text;
+    v_clean_username text;
+    v_candidate_username text;
+    v_full_name text;
+    v_state text;
+    v_pref_cat text;
+    v_retry_count integer := 0;
+    v_inserted boolean := false;
+  BEGIN
+    v_raw_username := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'username'), ''), split_part(COALESCE(NEW.email, ''), '@', 1));
+    v_clean_username := regexp_replace(lower(trim(COALESCE(v_raw_username, ''))), '[^a-z0-9_]', '_', 'g');
+    
+    -- Enforce strict 3-25 character bounds initially to guarantee room for collision suffix (_xxxx)
+    IF char_length(v_clean_username) < 3 THEN
+      v_clean_username := 'farmer_' || substr(replace(NEW.id::text, '-', ''), 1, 8);
+    ELSIF char_length(v_clean_username) > 25 THEN
+      v_clean_username := substr(v_clean_username, 1, 25);
+    END IF;
+
+    v_full_name := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'full_name'), ''), 'Kisan Farmer');
+    v_state := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'state'), ''), 'General');
+    v_pref_cat := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'preferred_category'), ''), 'General');
+    v_candidate_username := substr(v_clean_username, 1, 30);
+
+    WHILE NOT v_inserted AND v_retry_count < 5 LOOP
       BEGIN
-        v_raw_username := COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1));
-        v_clean_username := regexp_replace(lower(trim(v_raw_username)), '[^a-z0-9_]', '_', 'g');
-        
-        IF char_length(v_clean_username) < 3 THEN
-          v_clean_username := 'farmer_' || substr(md5(NEW.id::text), 1, 6);
-        END IF;
-
-        v_full_name := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'full_name'), ''), 'Kisan Farmer');
-        v_state := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'state'), ''), 'General');
-        v_pref_cat := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'preferred_category'), ''), 'General');
-        v_candidate_username := v_clean_username;
-
-        WHILE NOT v_inserted AND v_retry_count < 5 LOOP
-          BEGIN
-            INSERT INTO public.profiles (id, username, full_name, state, preferred_category, role)
-            VALUES (NEW.id, v_candidate_username, v_full_name, v_state, v_pref_cat, 'user');
-            v_inserted := true;
-          EXCEPTION WHEN unique_violation THEN
-            v_retry_count := v_retry_count + 1;
-            v_candidate_username := v_clean_username || '_' || substr(md5(random()::text || clock_timestamp()::text), 1, 4);
-          END;
-        END LOOP;
-
-        IF NOT v_inserted THEN
-          v_candidate_username := 'farmer_' || substr(replace(NEW.id::text, '-', ''), 1, 10);
-          INSERT INTO public.profiles (id, username, full_name, state, preferred_category, role)
-          VALUES (NEW.id, v_candidate_username, v_full_name, v_state, v_pref_cat, 'user')
-          ON CONFLICT (id) DO NOTHING;
-        END IF;
-
-        RETURN NEW;
+        INSERT INTO public.profiles (id, username, full_name, state, preferred_category, role)
+        VALUES (NEW.id, v_candidate_username, v_full_name, v_state, v_pref_cat, 'user');
+        v_inserted := true;
+      EXCEPTION WHEN unique_violation THEN
+        v_retry_count := v_retry_count + 1;
+        -- Base is at most 25 chars; suffix is 5 chars ('_' + 4 hex).
+        -- Total length is guaranteed between (3 + 5 = 8) and (25 + 5 = 30) characters.
+        v_candidate_username := substr(v_clean_username, 1, 25) || '_' || substr(md5(random()::text || clock_timestamp()::text), 1, 4);
       END;
-      $body$;
-    $func$;
-  END IF;
+    END LOOP;
+
+    IF NOT v_inserted THEN
+      -- Fallback: 'farmer_' (7) + 12 hex chars = 19 chars (strictly within 3-30)
+      v_candidate_username := 'farmer_' || substr(replace(NEW.id::text, '-', ''), 1, 12);
+      INSERT INTO public.profiles (id, username, full_name, state, preferred_category, role)
+      VALUES (NEW.id, v_candidate_username, v_full_name, v_state, v_pref_cat, 'user')
+      ON CONFLICT (id) DO NOTHING;
+    END IF;
+
+    RETURN NEW;
+  END;
+  $body$;
 END $$;
 
 -- Idempotent Trigger on auth.users: Validates trigger name, target table, and function binding
@@ -1601,6 +1704,7 @@ DO $$
 DECLARE
   v_created text[] := ARRAY[]::text[];
   v_reused text[] := ARRAY[]::text[];
+  v_pre_existing_def jsonb;
   v_row record;
 BEGIN
   FOR v_row IN SELECT obj_name, pre_existed FROM _kisan_inventory LOOP
@@ -1611,19 +1715,31 @@ BEGIN
     END IF;
   END LOOP;
 
+  SELECT jsonb_build_object(
+    'tables', COALESCE((SELECT jsonb_agg(obj_name) FROM _kisan_inventory WHERE obj_type = 'table' AND pre_existed), '[]'::jsonb),
+    'views', COALESCE((SELECT jsonb_agg(obj_name) FROM _kisan_inventory WHERE obj_type = 'view' AND pre_existed), '[]'::jsonb),
+    'functions', COALESCE((SELECT jsonb_agg(obj_name) FROM _kisan_inventory WHERE obj_type = 'function' AND pre_existed), '[]'::jsonb),
+    'triggers', COALESCE((SELECT jsonb_agg(obj_name) FROM _kisan_inventory WHERE obj_type = 'trigger' AND pre_existed), '[]'::jsonb),
+    'indexes', COALESCE((SELECT jsonb_agg(obj_name) FROM _kisan_inventory WHERE obj_type = 'index' AND pre_existed), '[]'::jsonb),
+    'policies', COALESCE((SELECT jsonb_agg(obj_name) FROM _kisan_inventory WHERE obj_type = 'policy' AND pre_existed), '[]'::jsonb),
+    'sequences', COALESCE((SELECT jsonb_agg(obj_name) FROM _kisan_inventory WHERE obj_type = 'sequence' AND pre_existed), '[]'::jsonb)
+  ) INTO v_pre_existing_def;
+
   INSERT INTO public._kisan_migration_manifest (
-    migration_id, created_objects, reused_objects, unknown_objects
+    migration_id, created_objects, reused_objects, unknown_objects, pre_existing_definitions
   ) VALUES (
     '20261102000000_create_kisan_sahayak_schema',
     to_jsonb(v_created),
     to_jsonb(v_reused),
-    '[]'::jsonb
+    '[]'::jsonb,
+    v_pre_existing_def
   )
   ON CONFLICT (migration_id) DO UPDATE SET
     applied_at = timezone('utc'::text, now()),
     applied_by = current_user,
     created_objects = EXCLUDED.created_objects,
-    reused_objects = EXCLUDED.reused_objects;
+    reused_objects = EXCLUDED.reused_objects,
+    pre_existing_definitions = EXCLUDED.pre_existing_definitions;
 END $$;
 
 COMMIT;

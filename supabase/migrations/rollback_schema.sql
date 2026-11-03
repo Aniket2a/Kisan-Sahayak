@@ -188,7 +188,67 @@ BEGIN
     RAISE NOTICE 'Dropped function fn_increment_resource_view';
   END IF;
 
-  -- 5. Safe Archive & Removal of Tables (Leaf to Root, No CASCADE)
+  -- 5. Drop Policies created by this migration (if relation still exists)
+  DECLARE
+    v_pol_item text[];
+    v_policies text[][] := ARRAY[
+      ARRAY['profiles', 'profiles_select_own'],
+      ARRAY['profiles', 'profiles_update_own'],
+      ARRAY['categories', 'categories_read_public'],
+      ARRAY['resources', 'resources_read_public'],
+      ARRAY['bookmarks', 'bookmarks_select_own'],
+      ARRAY['bookmarks', 'bookmarks_insert_own'],
+      ARRAY['bookmarks', 'bookmarks_delete_own'],
+      ARRAY['feedback', 'feedback_select_own'],
+      ARRAY['feedback', 'feedback_insert_own'],
+      ARRAY['feedback', 'feedback_update_own'],
+      ARRAY['feedback', 'feedback_delete_own'],
+      ARRAY['community_posts', 'posts_select_own'],
+      ARRAY['community_posts', 'posts_insert_own'],
+      ARRAY['community_posts', 'posts_update_own'],
+      ARRAY['community_posts', 'posts_delete_own'],
+      ARRAY['comments', 'comments_select_own'],
+      ARRAY['comments', 'comments_insert_own'],
+      ARRAY['comments', 'comments_update_own'],
+      ARRAY['comments', 'comments_delete_own'],
+      ARRAY['post_likes', 'likes_select_own'],
+      ARRAY['post_likes', 'likes_insert_own'],
+      ARRAY['post_likes', 'likes_delete_own'],
+      ARRAY['_kisan_migration_manifest', 'manifest_admin_service_role_only']
+    ];
+  BEGIN
+    FOREACH v_pol_item SLICE 1 IN ARRAY v_policies LOOP
+      IF v_created ? v_pol_item[2] AND to_regclass('public.' || v_pol_item[1]) IS NOT NULL THEN
+        EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', v_pol_item[2], v_pol_item[1]);
+        RAISE NOTICE 'Dropped policy % on %', v_pol_item[2], v_pol_item[1];
+      END IF;
+    END LOOP;
+  END;
+
+  -- 6. Drop Indexes created by this migration (if relation still exists)
+  DECLARE
+    v_idx text;
+    v_indexes text[] := ARRAY[
+      'idx_profiles_username_lower', 'idx_profiles_state',
+      'idx_categories_slug',
+      'idx_resources_category', 'idx_resources_type',
+      'idx_bookmarks_user_res',
+      'idx_feedback_resource', 'idx_feedback_user',
+      'idx_posts_user', 'idx_posts_category',
+      'idx_comments_post', 'idx_comments_user',
+      'idx_post_likes_user',
+      'idx_audit_logs_action', 'idx_audit_logs_created'
+    ];
+  BEGIN
+    FOREACH v_idx IN ARRAY v_indexes LOOP
+      IF v_created ? v_idx AND to_regclass('public.' || v_idx) IS NOT NULL THEN
+        EXECUTE format('DROP INDEX IF EXISTS public.%I', v_idx);
+        RAISE NOTICE 'Dropped index %', v_idx;
+      END IF;
+    END LOOP;
+  END;
+
+  -- 7. Safe Archive & Removal of Tables (Leaf to Root, No CASCADE)
   FOREACH v_tbl IN ARRAY v_drop_order LOOP
     -- Only act if this table was actually created by our migration
     IF v_created ? v_tbl THEN
@@ -199,12 +259,17 @@ BEGIN
         -- A. Create verified archive table with complete copy
         EXECUTE format('CREATE TABLE public.%I AS SELECT * FROM public.%I', v_arch_name, v_tbl);
         
-        -- B. Secure the archive table immediately
+        -- B. Explicit verification that archive table exists before proceeding
+        IF to_regclass('public.' || v_arch_name) IS NULL THEN
+          RAISE EXCEPTION 'Archive Verification Failed: Archive table % could not be created.', v_arch_name;
+        END IF;
+
+        -- C. Secure the archive table immediately
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', v_arch_name);
         EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC, anon, authenticated', v_arch_name);
         EXECUTE format('GRANT ALL ON TABLE public.%I TO postgres, service_role', v_arch_name);
 
-        -- C. Verify row count parity between live and archive
+        -- D. Verify row count parity between live and archive
         EXECUTE format('SELECT count(*) FROM public.%I', v_tbl) INTO v_orig_count;
         EXECUTE format('SELECT count(*) FROM public.%I', v_arch_name) INTO v_arch_count;
 
@@ -215,20 +280,20 @@ BEGIN
 
         RAISE NOTICE 'Safely archived % rows from % to %', v_orig_count, v_tbl, v_arch_name;
 
-        -- D. Drop table strictly without CASCADE
+        -- E. Drop table strictly without CASCADE
         EXECUTE format('DROP TABLE public.%I', v_tbl);
         RAISE NOTICE 'Safely dropped table %', v_tbl;
       END IF;
     ELSE
       IF v_reused ? v_tbl THEN
-        RAISE NOTICE 'Table % was marked as REUSED. Leaving completely intact.', v_tbl;
+        RAISE NOTICE 'Table % was marked as REUSED. Leaving completely intact without modifications.', v_tbl;
       ELSE
         RAISE NOTICE 'Table % was not marked as created. Leaving untouched.', v_tbl;
       END IF;
     END IF;
   END LOOP;
 
-  -- 6. Update manifest to record rollback completion
+  -- 8. Update manifest to record rollback completion
   UPDATE public._kisan_migration_manifest
   SET applied_at = timezone('utc'::text, now()),
       applied_by = current_user || ' (ROLLBACK)',

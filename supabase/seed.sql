@@ -26,11 +26,8 @@ VALUES
   (10, 'Credit & Loans', 'credit-loans', 'Institutional finance, KCC cards, and interest subvention.', 'fa-landmark'),
   (11, 'Organic & Soil Management', 'organic-farming', 'Natural farming, bio-fertilizers, and soil rejuvenation.', 'fa-leaf'),
   (12, 'Mandi & Marketplace', 'marketplace', 'e-NAM portals, market yard pricing, and seed/fertilizer outlets.', 'fa-store')
-ON CONFLICT (id) DO UPDATE SET
-  name = EXCLUDED.name,
-  slug = EXCLUDED.slug,
-  description = EXCLUDED.description,
-  icon = EXCLUDED.icon;
+ON CONFLICT (id) DO NOTHING;
+
 
 -- Synchronize categories identity sequence to highest ID safely
 DO $$
@@ -532,18 +529,8 @@ INSERT INTO public.resources (
     'ICAR Headquarters, Krishi Bhawan, New Delhi',
     310
   )
-ON CONFLICT (id) DO UPDATE SET
-  category_id = EXCLUDED.category_id,
-  title = EXCLUDED.title,
-  description = EXCLUDED.description,
-  resource_type = EXCLUDED.resource_type,
-  external_url = EXCLUDED.external_url,
-  image_url = EXCLUDED.image_url,
-  season_climate = EXCLUDED.season_climate,
-  eligibility = EXCLUDED.eligibility,
-  benefits = EXCLUDED.benefits,
-  provider = EXCLUDED.provider,
-  views_count = EXCLUDED.views_count;
+ON CONFLICT (id) DO NOTHING;
+
 
 -- Synchronize resources identity sequence to highest ID safely
 DO $$
