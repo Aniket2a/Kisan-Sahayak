@@ -650,11 +650,14 @@ VALUES
   ('idx_audit_logs_action', 'index', to_regclass('public.idx_audit_logs_action') IS NOT NULL),
   ('idx_audit_logs_created', 'index', to_regclass('public.idx_audit_logs_created') IS NOT NULL),
 
-  -- Policies (23 policies)
+  -- Policies (26 policies)
   ('profiles_select_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'profiles' AND policyname = 'profiles_select_own')),
   ('profiles_update_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'profiles' AND policyname = 'profiles_update_own')),
   ('categories_read_public', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'categories' AND policyname = 'categories_read_public')),
   ('resources_read_public', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'resources' AND policyname = 'resources_read_public')),
+  ('resources_admin_insert', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'resources' AND policyname = 'resources_admin_insert')),
+  ('resources_admin_update', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'resources' AND policyname = 'resources_admin_update')),
+  ('resources_admin_delete', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'resources' AND policyname = 'resources_admin_delete')),
   ('bookmarks_select_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bookmarks' AND policyname = 'bookmarks_select_own')),
   ('bookmarks_insert_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bookmarks' AND policyname = 'bookmarks_insert_own')),
   ('bookmarks_delete_own', 'policy', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bookmarks' AND policyname = 'bookmarks_delete_own')),
@@ -1446,6 +1449,23 @@ BEGIN
     EXECUTE 'CREATE POLICY "resources_read_public" ON public.resources FOR SELECT TO anon, authenticated USING (true)';
   END IF;
 
+  -- Resource writes are restricted to users whose profile role is admin.
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'resources' AND policyname = 'resources_admin_insert') THEN
+    EXECUTE $policy$CREATE POLICY "resources_admin_insert" ON public.resources FOR INSERT TO authenticated
+      WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'admin'))$policy$;
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'resources' AND policyname = 'resources_admin_update') THEN
+    EXECUTE $policy$CREATE POLICY "resources_admin_update" ON public.resources FOR UPDATE TO authenticated
+      USING (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'admin'))
+      WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'admin'))$policy$;
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'resources' AND policyname = 'resources_admin_delete') THEN
+    EXECUTE $policy$CREATE POLICY "resources_admin_delete" ON public.resources FOR DELETE TO authenticated
+      USING (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'admin'))$policy$;
+  END IF;
+
   -- 6.4 Bookmarks policies
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bookmarks' AND policyname = 'bookmarks_select_own') THEN
     EXECUTE 'CREATE POLICY "bookmarks_select_own" ON public.bookmarks FOR SELECT TO authenticated USING (user_id = auth.uid())';
@@ -1646,7 +1666,7 @@ GRANT SELECT ON public.profiles TO authenticated;
 GRANT UPDATE (full_name, state, preferred_category) ON public.profiles TO authenticated;
 
 GRANT SELECT ON public.categories TO authenticated;
-GRANT SELECT ON public.resources TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.resources TO authenticated;
 
 GRANT SELECT, INSERT, DELETE ON public.bookmarks TO authenticated;
 
