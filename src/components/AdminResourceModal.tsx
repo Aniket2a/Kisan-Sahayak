@@ -71,11 +71,15 @@ export const AdminResourceModal: React.FC = () => {
     e.preventDefault();
     if (!title.trim() || !description.trim()) return;
 
+    const matchedCategory = categories.find(c => c.name.toLowerCase() === categoryName.toLowerCase());
+    const targetCategoryId = matchedCategory ? matchedCategory.id : (adminModalResource?.category_id || 1);
+
     if (adminModalResource) {
       editResource(adminModalResource.id, {
         title: title.trim(),
         resource_type: resourceType,
         category_name: categoryName,
+        category_id: targetCategoryId,
         description: description.trim(),
         provider: provider.trim(),
         image_url: imageUrl.trim(),
@@ -89,7 +93,7 @@ export const AdminResourceModal: React.FC = () => {
         title: title.trim(),
         resource_type: resourceType,
         category_name: categoryName,
-        category_id: 1,
+        category_id: targetCategoryId,
         description: description.trim(),
         provider: provider.trim(),
         image_url: imageUrl.trim() || 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=600&q=80',

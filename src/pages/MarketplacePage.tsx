@@ -4,7 +4,7 @@ import { SAMPLE_MANDI_PRICES, INDIAN_STATES } from '../data/seedData';
 import { ResourceCard } from '../components/ResourceCard';
 
 export const MarketplacePage: React.FC = () => {
-  const { resources, t, tc, getLocResource } = useApp();
+  const { resources, isResourcesLoading, t, tc, getLocResource } = useApp();
   const [activeCategory, setActiveCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedState, setSelectedState] = useState<string>('All');
@@ -99,11 +99,20 @@ export const MarketplacePage: React.FC = () => {
           </div>
         </div>
 
-        <div className="resource-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
-          {marketResources.map(portal => (
-            <ResourceCard key={portal.id} resource={portal} />
-          ))}
-        </div>
+        {isResourcesLoading ? (
+          <div style={{ textAlign: 'center', padding: '3rem 2rem', background: '#fff', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-light)' }}>
+            <i className="fa-solid fa-spinner fa-spin" style={{ fontSize: '2rem', color: 'var(--primary-green)', marginBottom: '0.75rem' }}></i>
+            <p style={{ color: 'var(--text-muted)', margin: 0, fontWeight: 500 }}>
+              {t('loading_resources')}
+            </p>
+          </div>
+        ) : (
+          <div className="resource-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+            {marketResources.map(portal => (
+              <ResourceCard key={portal.id} resource={portal} />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* SECTION 2: LIVE APMC MANDI WHOLESALE SPOT RATES */}

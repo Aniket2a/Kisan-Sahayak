@@ -30,8 +30,8 @@ export const ProfilePage: React.FC = () => {
     );
   }
 
-  const userPostsCount = communityPosts.filter(p => p.user_id === currentUser.id).length;
-  const userFeedbackCount = feedback.filter(f => f.user_id === currentUser.id).length;
+  const userPostsCount = communityPosts.filter(p => String(p.user_id) === String(currentUser.id)).length;
+  const userFeedbackCount = feedback.filter(f => String(f.user_id) === String(currentUser.id)).length;
 
   const categories = [
     'General',
@@ -43,9 +43,9 @@ export const ProfilePage: React.FC = () => {
     'Agri Marketplace'
   ];
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateProfile({
+    await updateProfile({
       full_name: fullName,
       email,
       state,

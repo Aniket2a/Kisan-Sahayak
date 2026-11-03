@@ -95,7 +95,7 @@ export const CommunityPage: React.FC = () => {
             {communityPosts.map(post => {
               const postComments = comments.filter(c => c.post_id === post.id);
               const liked = isPostLiked(post.id);
-              const isOwnerOrAdmin = currentUser && (currentUser.id === post.user_id || currentUser.role === 'admin');
+              const isOwnerOrAdmin = currentUser && (String(currentUser.id) === String(post.user_id) || currentUser.role === 'admin');
 
               return (
                 <div

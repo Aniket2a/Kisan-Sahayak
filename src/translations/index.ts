@@ -124,6 +124,7 @@ export const TRANSLATIONS: Record<Language, Record<string, string>> = {
     filter_all: 'All',
     no_results_matching: 'No results found matching',
     adjust_filters_hint: 'Try adjusting your search criteria or switching to a different category filter.',
+    loading_resources: 'Loading agricultural resources...',
 
     // Crops Page
     crops_badge: 'Agronomy & Variety Directory',
@@ -498,6 +499,7 @@ export const TRANSLATIONS: Record<Language, Record<string, string>> = {
     filter_all: 'सभी',
     no_results_matching: 'खोज के अनुसार कोई परिणाम नहीं मिला:',
     adjust_filters_hint: 'कृपया अपने खोज शब्दों को बदलकर देखें या अन्य श्रेणी चुनें।',
+    loading_resources: 'कृषि संसाधन लोड हो रहे हैं...',
 
     // Crops Page
     crops_badge: 'कृषि विज्ञान व किस्म निर्देशिका',
@@ -872,6 +874,7 @@ export const TRANSLATIONS: Record<Language, Record<string, string>> = {
     filter_all: 'सर्व',
     no_results_matching: 'या शोधासाठी माहिती उपलब्ध नाही:',
     adjust_filters_hint: 'कृपया शोध शब्द तपासा किंवा दुसऱ्या विभागाची निवड करा.',
+    loading_resources: 'कृषी माहिती लोड होत आहे...',
 
     // Crops Page
     crops_badge: 'पिके, वाण व लागवड तंत्रज्ञान',

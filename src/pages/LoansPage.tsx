@@ -3,7 +3,7 @@ import { useApp } from '../context/AppContext';
 import { ResourceCard } from '../components/ResourceCard';
 
 export const LoansPage: React.FC = () => {
-  const { resources, t, tc, getLocResource } = useApp();
+  const { resources, isResourcesLoading, t, tc, getLocResource } = useApp();
   const [activeCategory, setActiveCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -107,7 +107,14 @@ export const LoansPage: React.FC = () => {
       </div>
 
       {/* LOANS GRID */}
-      {filteredLoans.length > 0 ? (
+      {isResourcesLoading ? (
+        <div style={{ textAlign: 'center', padding: '4rem 2rem', background: '#fff', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-light)' }}>
+          <i className="fa-solid fa-spinner fa-spin" style={{ fontSize: '2.5rem', color: 'var(--primary-green)', marginBottom: '1rem' }}></i>
+          <p style={{ color: 'var(--text-muted)', margin: 0, fontWeight: 500 }}>
+            {t('loading_resources')}
+          </p>
+        </div>
+      ) : filteredLoans.length > 0 ? (
         <div className="resource-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
           {filteredLoans.map(loan => (
             <ResourceCard key={loan.id} resource={loan} />

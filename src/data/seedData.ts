@@ -41,33 +41,30 @@ export const INITIAL_CATEGORIES: Category[] = [
 
 export const INITIAL_USERS: User[] = [
   {
-    id: 1,
+    id: '00000000-0000-0000-0000-000000000001',
     full_name: 'Demo Farmer One',
     username: 'demo_farmer_1',
     email: 'demo.farmer1@example.com',
-    password: 'DemoFarmer2026!',
     state: 'Punjab',
     preferred_category: 'Seeds & Crops',
     role: 'user',
     created_at: '2026-01-15T09:30:00Z'
   },
   {
-    id: 2,
+    id: '00000000-0000-0000-0000-000000000002',
     full_name: 'Demo Farmer Two',
     username: 'demo_farmer_2',
     email: 'demo.farmer2@example.com',
-    password: 'DemoFarmer2026!',
     state: 'Madhya Pradesh',
     preferred_category: 'Organic Farming',
     role: 'user',
     created_at: '2026-02-10T11:20:00Z'
   },
   {
-    id: 3,
+    id: '00000000-0000-0000-0000-000000000003',
     full_name: 'Demo Farmer Three',
     username: 'demo_farmer_3',
     email: 'demo.farmer3@example.com',
-    password: 'DemoFarmer2026!',
     state: 'Haryana',
     preferred_category: 'Farming Tools',
     role: 'user',
@@ -676,7 +673,7 @@ export const INITIAL_RESOURCES: Resource[] = [
   }
 ];
 
-export const INITIAL_BOOKMARKS: Array<{ userId: number; resourceId: number; createdAt: string }> = [
+export const INITIAL_BOOKMARKS: Array<{ userId: string | number; resourceId: number; createdAt: string }> = [
   { userId: 1, resourceId: 1, createdAt: '2026-03-01T10:00:00Z' },
   { userId: 1, resourceId: 2, createdAt: '2026-03-02T11:00:00Z' },
   { userId: 1, resourceId: 18, createdAt: '2026-03-03T12:00:00Z' },
@@ -807,7 +804,7 @@ export const INITIAL_COMMENTS: Comment[] = [
   }
 ];
 
-export const INITIAL_LIKES: Array<{ postId: number; userId: number }> = [
+export const INITIAL_LIKES: Array<{ postId: number; userId: string | number }> = [
   { postId: 1, userId: 1 },
   { postId: 1, userId: 2 },
   { postId: 1, userId: 3 },

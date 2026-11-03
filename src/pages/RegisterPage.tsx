@@ -12,6 +12,7 @@ export const RegisterPage: React.FC = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [state, setState] = useState('Punjab');
   const [preferredCategory, setPreferredCategory] = useState('Seeds & Crops');
+  const [loading, setLoading] = useState(false);
 
   const categories = [
     'Seeds & Crops',
@@ -23,7 +24,7 @@ export const RegisterPage: React.FC = () => {
     'General'
   ];
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!fullName.trim() || !username.trim() || !email.trim() || !password) {
@@ -41,19 +42,24 @@ export const RegisterPage: React.FC = () => {
       return;
     }
 
-    const res = register({
-      full_name: fullName,
-      username,
-      email,
-      password,
-      state,
-      preferred_category: preferredCategory
-    });
+    setLoading(true);
+    try {
+      const res = await register({
+        full_name: fullName,
+        username,
+        email,
+        password,
+        state,
+        preferred_category: preferredCategory
+      });
 
-    if (res.success) {
-      navigate('/dashboard');
-    } else {
-      showToast(res.message, 'danger');
+      if (res.success) {
+        navigate('/dashboard');
+      } else {
+        showToast(res.message, 'danger');
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -226,9 +232,18 @@ export const RegisterPage: React.FC = () => {
           <button
             type="submit"
             className="btn btn-primary btn-lg"
-            style={{ width: '100%', justifyContent: 'center', marginTop: '0.75rem' }}
+            style={{ width: '100%', justifyContent: 'center', marginTop: '0.75rem', opacity: loading ? 0.8 : 1 }}
+            disabled={loading}
           >
-            <i className="fa-solid fa-user-plus"></i> {t('register_submit')}
+            {loading ? (
+              <>
+                <i className="fa-solid fa-circle-notch fa-spin"></i> {t('register_submit')}...
+              </>
+            ) : (
+              <>
+                <i className="fa-solid fa-user-plus"></i> {t('register_submit')}
+              </>
+            )}
           </button>
         </form>
 

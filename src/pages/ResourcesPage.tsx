@@ -3,7 +3,7 @@ import { useApp } from '../context/AppContext';
 import { ResourceCard } from '../components/ResourceCard';
 
 export const ResourcesPage: React.FC = () => {
-  const { resources, t, tc, getLocResource } = useApp();
+  const { resources, isResourcesLoading, t, tc, getLocResource } = useApp();
   const [activeCategory, setActiveCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -110,7 +110,14 @@ export const ResourcesPage: React.FC = () => {
       </div>
 
       {/* GUIDES GRID */}
-      {filteredGuides.length > 0 ? (
+      {isResourcesLoading ? (
+        <div style={{ textAlign: 'center', padding: '4rem 2rem', background: '#fff', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-light)' }}>
+          <i className="fa-solid fa-spinner fa-spin" style={{ fontSize: '2.5rem', color: 'var(--primary-green)', marginBottom: '1rem' }}></i>
+          <p style={{ color: 'var(--text-muted)', margin: 0, fontWeight: 500 }}>
+            {t('loading_resources')}
+          </p>
+        </div>
+      ) : filteredGuides.length > 0 ? (
         <div className="resource-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
           {filteredGuides.map(guide => (
             <ResourceCard key={guide.id} resource={guide} />

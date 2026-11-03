@@ -5,6 +5,7 @@ export const LoginPage: React.FC = () => {
   const { login, navigate, showToast, t } = useApp();
   const [usernameOrEmail, setUsernameOrEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -13,15 +14,20 @@ export const LoginPage: React.FC = () => {
       return;
     }
 
-    const res = await login(usernameOrEmail, password);
-    if (res.success) {
-      if (res.role === 'admin') {
-        navigate('/admin');
+    setLoading(true);
+    try {
+      const res = await login(usernameOrEmail, password);
+      if (res.success) {
+        if (res.role === 'admin') {
+          navigate('/admin');
+        } else {
+          navigate('/dashboard');
+        }
       } else {
-        navigate('/dashboard');
+        showToast(res.message, 'danger');
       }
-    } else {
-      showToast(res.message, 'danger');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -83,9 +89,18 @@ export const LoginPage: React.FC = () => {
           <button
             type="submit"
             className="btn btn-primary btn-lg"
-            style={{ width: '100%', justifyContent: 'center', marginTop: '0.5rem' }}
+            style={{ width: '100%', justifyContent: 'center', marginTop: '0.5rem', opacity: loading ? 0.8 : 1 }}
+            disabled={loading}
           >
-            <i className="fa-solid fa-arrow-right-to-bracket"></i> {t('login_submit')}
+            {loading ? (
+              <>
+                <i className="fa-solid fa-circle-notch fa-spin"></i> {t('login_submit')}...
+              </>
+            ) : (
+              <>
+                <i className="fa-solid fa-arrow-right-to-bracket"></i> {t('login_submit')}
+              </>
+            )}
           </button>
         </form>
 

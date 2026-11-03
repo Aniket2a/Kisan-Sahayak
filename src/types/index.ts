@@ -5,11 +5,10 @@ export type ResourceType = 'crop' | 'tool' | 'scheme' | 'loan' | 'guide' | 'mark
 export type UserRole = 'user' | 'admin';
 
 export interface User {
-  id: number;
+  id: string;
   full_name: string;
   username: string;
   email: string;
-  password?: string;
   state: string;
   preferred_category: string;
   role: UserRole;
@@ -43,7 +42,7 @@ export interface Resource {
 
 export interface Feedback {
   id: number;
-  user_id: number;
+  user_id: string | number;
   user_name: string;
   username?: string;
   resource_id: number;
@@ -56,7 +55,7 @@ export interface Feedback {
 export interface Comment {
   id: number;
   post_id: number;
-  user_id: number;
+  user_id: string | number;
   comment_author: string;
   comment_state?: string;
   comment: string;
@@ -65,7 +64,7 @@ export interface Comment {
 
 export interface CommunityPost {
   id: number;
-  user_id: number;
+  user_id: string | number;
   author_name: string;
   author_state: string;
   title: string;

@@ -306,7 +306,9 @@ export const AdminPage: React.FC = () => {
               <tbody>
                 {users.map(u => (
                   <tr key={u.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
-                    <td style={{ padding: '0.75rem', fontWeight: 700 }}>#{u.id}</td>
+                    <td style={{ padding: '0.75rem', fontWeight: 700 }}>
+                      #{typeof u.id === 'string' && u.id.length > 8 ? `${u.id.substring(0, 8)}...` : u.id}
+                    </td>
                     <td style={{ padding: '0.75rem' }}>
                       <div style={{ fontWeight: 700, color: 'var(--forest-dark)', fontSize: '0.9rem' }}>{u.full_name}</div>
                       <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>@{u.username}</div>
@@ -329,7 +331,7 @@ export const AdminPage: React.FC = () => {
                     </td>
                     <td style={{ padding: '0.75rem' }}>
                       <div style={{ display: 'flex', gap: '0.4rem' }}>
-                        {u.id !== currentUser.id && (
+                        {String(u.id) !== String(currentUser.id) && (
                           <>
                             <button
                               type="button"
@@ -349,7 +351,7 @@ export const AdminPage: React.FC = () => {
                             </button>
                           </>
                         )}
-                        {u.id === currentUser.id && (
+                        {String(u.id) === String(currentUser.id) && (
                           <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
                             ({t('nav_admin')})
                           </span>
