@@ -85,9 +85,9 @@ interface AppContextType {
   updateProfile: (updates: { full_name: string; email: string; state: string; preferred_category: string; new_password?: string }) => Promise<{ success: boolean; message: string }>;
 
   // Resource CRUD (Admin)
-  addResource: (data: Omit<Resource, 'id' | 'views_count'>) => void;
-  editResource: (id: number, data: Partial<Resource>) => void;
-  deleteResource: (id: number) => void;
+  addResource: (data: Omit<Resource, 'id' | 'views_count'>) => Promise<void>;
+  editResource: (id: number, data: Partial<Resource>) => Promise<void>;
+  deleteResource: (id: number) => Promise<void>;
 
   // Community
   createPost: (title: string, category: string, content: string) => void;
@@ -97,8 +97,8 @@ interface AppContextType {
   addComment: (postId: number, commentText: string) => void;
 
   // User Management (Admin)
-  toggleUserRole: (userId: string | number) => void;
-  deleteUser: (userId: string | number) => void;
+  toggleUserRole: (userId: string | number) => Promise<void>;
+  deleteUser: (userId: string | number) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -252,6 +252,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
+  const adminRequest = async (url: string, options: RequestInit = {}) => {
+    const token = sessionStorage.getItem('kisan_admin_token');
+    if (!token) throw new Error('Your admin session has expired. Please sign in again.');
+    const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}), Authorization: 'Bearer ' + token } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || payload.message || ('Admin request failed (' + response.status + ').'));
+    return payload;
+  };
+  const fetchAdminUsers = async () => {
+    const payload = await adminRequest('/api/admin/users');
+    setUsers(Array.isArray(payload.users) ? payload.users : []);
+  };
   // Restore session on startup (Admin session or Supabase farmer session)
   useEffect(() => {
     let isMounted = true;
@@ -276,6 +288,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               preferred_category: 'Government Schemes',
               created_at: new Date().toISOString()
             });
+            try { await fetchAdminUsers(); } catch (error: any) { showToast(error.message || 'Could not load users.', 'danger'); }
             setIsAuthLoading(false);
             return;
           } else {
@@ -1369,113 +1382,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Resource CRUD
-  const addResource = async (data: Omit<Resource, 'id' | 'views_count'>) => {
-    const existing = resources.find(r => r.title.toLowerCase() === data.title.toLowerCase());
-    if (existing) {
-      showToast(`A resource with title "${data.title}" already exists.`, 'warning');
-      return;
-    }
-
-    let createdId = Date.now();
-
-    // If Supabase is configured, attempt insert
-    if (isSupabaseConfigured()) {
-      try {
-        const { data: inserted, error } = await supabase
-          .from('resources')
-          .insert({
-            title: data.title.trim(),
-            description: data.description.trim(),
-            category_id: data.category_id,
-            resource_type: data.resource_type,
-            external_url: data.external_url || null,
-            image_url: data.image_url || null,
-            season_climate: data.season_climate || null,
-            eligibility: data.eligibility || null,
-            benefits: data.benefits || null,
-            provider: data.provider || null,
-            views_count: 0
-          })
-          .select('id')
-          .maybeSingle();
-
-        if (!error && inserted) {
-          createdId = Number(inserted.id);
-        } else if (error) {
-          console.warn('Could not insert resource in Supabase (will persist locally):', error.message);
-        }
-      } catch (err) {
-        console.warn('Supabase resource insert error:', err);
-      }
-    }
-
-    const newRes: Resource = {
-      ...data,
-      id: createdId,
-      views_count: 0,
-      created_at: new Date().toISOString()
-    };
-
-    setResources(prev => [newRes, ...prev]);
-    showToast(`Resource "${newRes.title}" created successfully.`, 'success');
+  const addResource = async (data: Omit<Resource, 'id' | 'views_count'>): Promise<void> => {
+    if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return; }
+    if (resources.some(r => r.title.toLowerCase() === data.title.toLowerCase())) { showToast('A resource with this title already exists.', 'warning'); return; }
+    try {
+      await adminRequest('/api/admin/resources', { method: 'POST', body: JSON.stringify({ title: data.title, description: data.description, category_id: data.category_id, resource_type: data.resource_type, external_url: data.external_url, image_url: data.image_url, season_climate: data.season_climate, eligibility: data.eligibility, benefits: data.benefits, provider: data.provider }) });
+      await fetchResources(); showToast('Resource created successfully.', 'success');
+    } catch (error: any) { showToast(error.message || 'Resource creation failed.', 'danger'); }
   };
 
-  const editResource = async (id: number, data: Partial<Resource>) => {
-    if (isSupabaseConfigured()) {
-      try {
-        const updatePayload: any = {};
-        if (data.title !== undefined) updatePayload.title = data.title.trim();
-        if (data.description !== undefined) updatePayload.description = data.description.trim();
-        if (data.category_id !== undefined) updatePayload.category_id = data.category_id;
-        if (data.resource_type !== undefined) updatePayload.resource_type = data.resource_type;
-        if (data.external_url !== undefined) updatePayload.external_url = data.external_url;
-        if (data.image_url !== undefined) updatePayload.image_url = data.image_url;
-        if (data.season_climate !== undefined) updatePayload.season_climate = data.season_climate;
-        if (data.eligibility !== undefined) updatePayload.eligibility = data.eligibility;
-        if (data.benefits !== undefined) updatePayload.benefits = data.benefits;
-        if (data.provider !== undefined) updatePayload.provider = data.provider;
-
-        const { error } = await supabase
-          .from('resources')
-          .update(updatePayload)
-          .eq('id', id);
-
-        if (error) {
-          console.warn('Could not update resource in Supabase (will persist locally):', error.message);
-        }
-      } catch (err) {
-        console.warn('Supabase resource update error:', err);
-      }
-    }
-
-    setResources(prev =>
-      prev.map(r => (r.id === id ? { ...r, ...data } : r))
-    );
-    showToast(`Resource #${id} updated successfully.`, 'success');
+  const editResource = async (id: number, data: Partial<Resource>): Promise<void> => {
+    if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return; }
+    const payload: Record<string, any> = {};
+    ['title','description','category_id','resource_type','external_url','image_url','season_climate','eligibility','benefits','provider'].forEach(key => { if ((data as any)[key] !== undefined) payload[key] = (data as any)[key]; });
+    try { await adminRequest('/api/admin/resources/' + id, { method: 'PATCH', body: JSON.stringify(payload) }); await fetchResources(); showToast('Resource updated successfully.', 'success'); }
+    catch (error: any) { showToast(error.message || 'Resource update failed.', 'danger'); }
   };
 
-  const deleteResource = async (id: number) => {
-    if (isSupabaseConfigured()) {
-      try {
-        const { error } = await supabase
-          .from('resources')
-          .delete()
-          .eq('id', id);
-
-        if (error) {
-          console.warn('Could not delete resource in Supabase (will persist locally):', error.message);
-        }
-      } catch (err) {
-        console.warn('Supabase resource delete error:', err);
-      }
-    }
-
-    setResources(prev => prev.filter(r => r.id !== id));
-    setBookmarks(prev => prev.filter(b => b.resourceId !== id));
-    setFeedback(prev => prev.filter(f => f.resource_id !== id));
-    showToast(`Resource #${id} deleted permanently.`, 'info');
+  const deleteResource = async (id: number): Promise<void> => {
+    if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return; }
+    try { await adminRequest('/api/admin/resources/' + id, { method: 'DELETE' }); await fetchResources(); showToast('Resource deleted successfully.', 'success'); }
+    catch (error: any) { showToast(error.message || 'Resource deletion failed.', 'danger'); }
   };
-
   // Community
   const createPost = (title: string, category: string, content: string) => {
     if (!currentUser) {
@@ -1558,23 +1486,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Your comment was added!', 'success');
   };
 
-  // User Management (Role escalation prevented)
-  const toggleUserRole = (_userId: string | number) => {
-    showToast('Role escalation is disabled. Only the private server-configured Admin account possesses administrator privileges.', 'warning');
+  // User management uses protected server-side admin endpoints.
+  const toggleUserRole = async (userId: string | number): Promise<void> => {
+    const target = users.find(user => String(user.id) === String(userId));
+    if (!target || !currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required.', 'danger'); return; }
+    if (String(userId) === String(currentUser.id)) { showToast('You cannot change your own administrator role.', 'warning'); return; }
+    const role: UserRole = target.role === 'admin' ? 'user' : 'admin';
+    try { await adminRequest('/api/admin/users/' + encodeURIComponent(String(userId)) + '/role', { method: 'PATCH', body: JSON.stringify({ role }) }); await fetchAdminUsers(); showToast('User role updated.', 'success'); }
+    catch (error: any) { showToast(error.message || 'Could not update user role.', 'danger'); }
   };
 
-  const deleteUser = (userId: string | number) => {
-    if (currentUser && String(currentUser.id) === String(userId)) {
-      showToast('Cannot delete your own admin account.', 'danger');
-      return;
-    }
-
-    setUsers(prev => prev.filter(u => String(u.id) !== String(userId)));
-    setBookmarks(prev => prev.filter(b => String(b.userId) !== String(userId)));
-    setFeedback(prev => prev.filter(f => String(f.user_id) !== String(userId)));
-    setCommunityPosts(prev => prev.filter(p => String(p.user_id) !== String(userId)));
-    setComments(prev => prev.filter(c => String(c.user_id) !== String(userId)));
-    showToast('User and all associated data deleted.', 'info');
+  const deleteUser = async (userId: string | number): Promise<void> => {
+    if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required.', 'danger'); return; }
+    if (String(userId) === String(currentUser.id)) { showToast('You cannot delete your own admin account.', 'danger'); return; }
+    if (!users.some(user => String(user.id) === String(userId))) return;
+    try { await adminRequest('/api/admin/users/' + encodeURIComponent(String(userId)), { method: 'DELETE' }); await fetchAdminUsers(); showToast('User account deleted successfully.', 'success'); }
+    catch (error: any) { showToast(error.message || 'User deletion failed.', 'danger'); }
   };
 
   return (
