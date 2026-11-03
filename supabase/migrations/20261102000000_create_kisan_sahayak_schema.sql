@@ -1360,20 +1360,24 @@ BEGIN
   END IF;
 END $$;
 
--- Verify view ownership is postgres
+-- Verify view ownership is postgres and ensure security_barrier is enabled
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema = 'public' AND table_name = 'v_community_posts') THEN
     ALTER VIEW public.v_community_posts OWNER TO postgres;
+    ALTER VIEW public.v_community_posts SET (security_barrier = true);
   END IF;
   IF EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema = 'public' AND table_name = 'v_community_comments') THEN
     ALTER VIEW public.v_community_comments OWNER TO postgres;
+    ALTER VIEW public.v_community_comments SET (security_barrier = true);
   END IF;
   IF EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema = 'public' AND table_name = 'v_resource_feedback') THEN
     ALTER VIEW public.v_resource_feedback OWNER TO postgres;
+    ALTER VIEW public.v_resource_feedback SET (security_barrier = true);
   END IF;
   IF EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema = 'public' AND table_name = 'v_resource_ratings') THEN
     ALTER VIEW public.v_resource_ratings OWNER TO postgres;
+    ALTER VIEW public.v_resource_ratings SET (security_barrier = true);
   END IF;
 END $$;
 
