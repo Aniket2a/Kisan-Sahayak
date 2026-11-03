@@ -143,8 +143,16 @@ async function startServer() {
       if (!Number.isInteger(Number(payload.category_id))) throw new Error('A valid category is required.');
       if (typeof payload.resource_type !== 'string' || !payload.resource_type.trim()) throw new Error('A resource type is required.');
     }
-    if (payload.title !== undefined) payload.title = String(payload.title).trim();
-    if (payload.description !== undefined) payload.description = String(payload.description).trim();
+    if (payload.title !== undefined) {
+      if (typeof payload.title !== 'string' || !payload.title.trim()) throw new Error('Resource title cannot be empty.');
+      payload.title = payload.title.trim();
+    }
+    if (payload.description !== undefined) {
+      if (typeof payload.description !== 'string' || !payload.description.trim()) throw new Error('Resource description cannot be empty.');
+      payload.description = payload.description.trim();
+    }
+    const allowedResourceTypes = ['crop', 'tool', 'scheme', 'loan', 'guide', 'marketplace', 'community'];
+    if (payload.resource_type !== undefined && !allowedResourceTypes.includes(payload.resource_type)) throw new Error('Invalid resource type.');
     if (payload.category_id !== undefined) {
       const categoryId = Number(payload.category_id);
       if (!Number.isInteger(categoryId) || categoryId <= 0) throw new Error('A valid category is required.');
