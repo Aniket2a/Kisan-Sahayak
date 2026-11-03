@@ -290,7 +290,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const data = await res.json();
           if (isMounted && data && data.valid && data.role === 'admin') {
             setCurrentUser({
-              id: 'admin_root',
+              id: String(data.id || 'admin_root'),
               full_name: 'Administrator',
               username: data.username || 'admin',
               email: 'admin@kisansahayak.in',
