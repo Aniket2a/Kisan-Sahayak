@@ -85,9 +85,9 @@ interface AppContextType {
   updateProfile: (updates: { full_name: string; email: string; state: string; preferred_category: string; new_password?: string }) => Promise<{ success: boolean; message: string }>;
 
   // Resource CRUD (Admin)
-  addResource: (data: Omit<Resource, 'id' | 'views_count'>) => Promise<void>;
-  editResource: (id: number, data: Partial<Resource>) => Promise<void>;
-  deleteResource: (id: number) => Promise<void>;
+  addResource: (data: Omit<Resource, 'id' | 'views_count'>) => Promise<boolean>;
+  editResource: (id: number, data: Partial<Resource>) => Promise<boolean>;
+  deleteResource: (id: number) => Promise<boolean>;
 
   // Community
   createPost: (title: string, category: string, content: string) => void;
@@ -1412,27 +1412,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Resource CRUD
-  const addResource = async (data: Omit<Resource, 'id' | 'views_count'>): Promise<void> => {
-    if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return; }
-    if (resources.some(r => r.title.toLowerCase() === data.title.toLowerCase())) { showToast('A resource with this title already exists.', 'warning'); return; }
+  const addResource = async (data: Omit<Resource, 'id' | 'views_count'>): Promise<boolean> => {
+    if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return false; }
+    if (resources.some(r => r.title.toLowerCase() === data.title.toLowerCase())) { showToast('A resource with this title already exists.', 'warning'); return false; }
     try {
       await adminRequest('/api/admin/resources', { method: 'POST', body: JSON.stringify({ title: data.title, description: data.description, category_id: data.category_id, resource_type: data.resource_type, external_url: data.external_url, image_url: data.image_url, season_climate: data.season_climate, eligibility: data.eligibility, benefits: data.benefits, provider: data.provider }) });
-      await fetchResources(); showToast('Resource created successfully.', 'success');
-    } catch (error: any) { showToast(error.message || 'Resource creation failed.', 'danger'); }
+      await fetchResources(); showToast('Resource created successfully.', 'success'); return true;
+    } catch (error: any) { showToast(error.message || 'Resource creation failed.', 'danger'); return false; }
   };
 
-  const editResource = async (id: number, data: Partial<Resource>): Promise<void> => {
+  const editResource = async (id: number, data: Partial<Resource>): Promise<boolean> => {
     if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return; }
     const payload: Record<string, any> = {};
     ['title','description','category_id','resource_type','external_url','image_url','season_climate','eligibility','benefits','provider'].forEach(key => { if ((data as any)[key] !== undefined) payload[key] = (data as any)[key]; });
-    try { await adminRequest('/api/admin/resources/' + id, { method: 'PATCH', body: JSON.stringify(payload) }); await fetchResources(); showToast('Resource updated successfully.', 'success'); }
-    catch (error: any) { showToast(error.message || 'Resource update failed.', 'danger'); }
+    try { await adminRequest('/api/admin/resources/' + id, { method: 'PATCH', body: JSON.stringify(payload) }); await fetchResources(); showToast('Resource updated successfully.', 'success'); return true; }
+    catch (error: any) { showToast(error.message || 'Resource update failed.', 'danger'); return false; }
   };
 
-  const deleteResource = async (id: number): Promise<void> => {
+  const deleteResource = async (id: number): Promise<boolean> => {
     if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return; }
-    try { await adminRequest('/api/admin/resources/' + id, { method: 'DELETE' }); await fetchResources(); showToast('Resource deleted successfully.', 'success'); }
-    catch (error: any) { showToast(error.message || 'Resource deletion failed.', 'danger'); }
+    try { await adminRequest('/api/admin/resources/' + id, { method: 'DELETE' }); await fetchResources(); showToast('Resource deleted successfully.', 'success'); return true; }
+    catch (error: any) { showToast(error.message || 'Resource deletion failed.', 'danger'); return false; }
   };
   // Community
   const createPost = (title: string, category: string, content: string) => {
