@@ -275,6 +275,22 @@ async function startServer() {
     });
   });
 
+  // Exchange a valid Supabase session for an admin API token only when the database profile is admin.
+  app.post('/api/auth/supabase-admin-session', asyncAdmin(async (req, res) => {
+    const accessToken = req.body?.accessToken;
+    if (typeof accessToken !== 'string' || !accessToken) return res.status(401).json({ error: 'Supabase access token is required.' });
+    const client = getAdminSupabase();
+    const { data: authData, error: authError } = await client.auth.getUser(accessToken);
+    if (authError || !authData.user) return res.status(401).json({ error: 'Invalid Supabase session.' });
+    const { data: profile, error: profileError } = await client.from('profiles').select('id, username, full_name, state, preferred_category, role, created_at').eq('id', authData.user.id).maybeSingle();
+    if (profileError) return res.status(502).json({ error: profileError.message });
+    if (!profile || profile.role !== 'admin') return res.status(403).json({ error: 'This account is not an administrator.' });
+    const config = getEnvConfig();
+    if (!config.secret || config.secret.length < 32) return res.status(503).json({ error: 'Admin session signing is not configured securely.' });
+    const token = jwt.sign({ id: profile.id, username: profile.username, role: 'admin', authUserId: profile.id }, config.secret, { expiresIn: '8h' });
+    return res.json({ success: true, token, user: { id: profile.id, full_name: profile.full_name, username: profile.username, email: authData.user.email || '', role: 'admin', state: profile.state, preferred_category: profile.preferred_category, created_at: profile.created_at } });
+  }));
+
   // 4. Verify Admin Session / Token
   app.get('/api/auth/verify-session', authenticateAdminToken, (req: Request, res: Response) => {
     const user = (req as any).adminUser;
@@ -325,6 +341,11 @@ async function startServer() {
     if (lookupError) return res.status(502).json({ error: lookupError.message });
     if (!target) return res.status(404).json({ error: 'User profile was not found.' });
     if (target.role === role) return res.json({ success: true, id: targetId, role });
+    if (target.role === 'admin' && role === 'user') {
+      const { count, error: countError } = await client.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'admin');
+      if (countError) return res.status(502).json({ error: countError.message });
+      if ((count || 0) <= 1) return res.status(409).json({ error: 'The last administrator cannot be demoted.' });
+    }
     const { error } = await client.rpc('admin_set_user_role', { p_target_user_id: targetId, p_new_role: role });
     if (error) return res.status(502).json({ error: error.message });
     return res.json({ success: true, id: targetId, role });
@@ -337,6 +358,11 @@ async function startServer() {
     const { data: target, error: lookupError } = await client.from('profiles').select('id, role').eq('id', targetId).maybeSingle();
     if (lookupError) return res.status(502).json({ error: lookupError.message });
     if (!target) return res.status(404).json({ error: 'User profile was not found.' });
+    if (target.role === 'admin') {
+      const { count, error: countError } = await client.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'admin');
+      if (countError) return res.status(502).json({ error: countError.message });
+      if ((count || 0) <= 1) return res.status(409).json({ error: 'The last administrator cannot be deleted.' });
+    }
     const { error } = await client.auth.admin.deleteUser(targetId);
     if (error) return res.status(502).json({ error: error.message });
     return res.json({ success: true, id: targetId });
