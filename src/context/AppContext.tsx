@@ -1112,6 +1112,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             created_at: new Date().toISOString()
           };
           setCurrentUser(adminUser);
+          try { await fetchAdminUsers(); } catch (error: any) { showToast(error.message || 'Could not load users.', 'danger'); }
           showToast(`${t('auth_welcome_back')}, ${adminUser.full_name}!`, 'success');
           return { success: true, message: t('auth_login_success'), role: 'admin' };
         }
