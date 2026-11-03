@@ -4,6 +4,7 @@ import {
   Resource,
   ResourceType,
   Category,
+  Bookmark,
   Feedback,
   CommunityPost,
   Comment,
@@ -61,14 +62,21 @@ interface AppContextType {
   closeAdminModal: () => void;
 
   // Bookmarks
+  isBookmarksLoading: boolean;
+  bookmarksError: string | null;
+  refreshBookmarks: () => Promise<void>;
   isBookmarked: (resourceId: number) => boolean;
-  toggleBookmark: (resourceId: number) => void;
+  toggleBookmark: (resourceId: number) => Promise<void> | void;
   bookmarkedIds: number[];
   
-  // Ratings
+  // Ratings & Feedback
+  isFeedbackLoading: boolean;
+  feedbackError: string | null;
+  refreshFeedback: () => Promise<void>;
   ratingsMap: Record<number, { avg: number; count: number }>;
-  addFeedback: (resourceId: number, rating: number, comment: string) => void;
-  deleteFeedback: (feedbackId: number) => void;
+  addFeedback: (resourceId: number, rating: number, comment: string) => Promise<void> | void;
+  editFeedback: (feedbackId: number, rating: number, comment: string) => Promise<void> | void;
+  deleteFeedback: (feedbackId: number) => Promise<void> | void;
 
   // Auth & Profile
   login: (usernameOrEmail: string, password?: string) => Promise<{ success: boolean; message: string; role?: string }>;
@@ -146,15 +154,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isResourcesLoading, setIsResourcesLoading] = useState<boolean>(true);
   const [resourcesError, setResourcesError] = useState<string | null>(null);
 
-  const [bookmarks, setBookmarks] = useState<Array<{ userId: string | number; resourceId: number; createdAt: string }>>(() => {
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => {
     const saved = localStorage.getItem('kisan_bookmarks');
     return saved ? JSON.parse(saved) : INITIAL_BOOKMARKS;
   });
+  const [isBookmarksLoading, setIsBookmarksLoading] = useState<boolean>(false);
+  const [bookmarksError, setBookmarksError] = useState<string | null>(null);
 
   const [feedback, setFeedback] = useState<Feedback[]>(() => {
     const saved = localStorage.getItem('kisan_feedback');
     return saved ? JSON.parse(saved) : INITIAL_FEEDBACK;
   });
+  const [isFeedbackLoading, setIsFeedbackLoading] = useState<boolean>(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [ratingsFromDb, setRatingsFromDb] = useState<Record<number, { avg: number; count: number }>>({});
 
   const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>(() => {
     const saved = localStorage.getItem('kisan_posts');
@@ -454,6 +467,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const loadedCats = await fetchCategories();
       if (active) {
         await fetchResources(loadedCats);
+        await fetchFeedback();
+        await fetchRatings();
       }
     }
 
@@ -463,6 +478,184 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       active = false;
     };
   }, []);
+
+  // Helper to validate UUID string
+  const isValidUuid = (id: string | number): boolean => {
+    return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+  };
+
+  // Fetch Bookmarks for authenticated farmer from public.bookmarks
+  const fetchBookmarks = async (targetUser?: User | null): Promise<void> => {
+    const user = targetUser !== undefined ? targetUser : currentUser;
+    if (!user) {
+      setIsBookmarksLoading(false);
+      return;
+    }
+
+    // Only query Supabase for farmers with valid Supabase Auth UUID
+    if (!isSupabaseConfigured() || !isValidUuid(user.id)) {
+      setIsBookmarksLoading(false);
+      return;
+    }
+
+    setIsBookmarksLoading(true);
+    setBookmarksError(null);
+
+    try {
+      const { data, error } = await supabase
+        .from('bookmarks')
+        .select('id, user_id, resource_id, created_at')
+        .eq('user_id', user.id);
+
+      if (error) {
+        console.warn('Could not fetch bookmarks from Supabase (Stage 2 migration may be pending):', error.message);
+        setBookmarksError(error.message);
+      } else if (data) {
+        const remoteBookmarks: Bookmark[] = data.map(b => ({
+          id: b.id,
+          userId: b.user_id,
+          resourceId: Number(b.resource_id),
+          createdAt: b.created_at
+        }));
+
+        setBookmarks(prev => {
+          // Other users' bookmarks (offline fallback / multi-account)
+          const otherUserBookmarks = prev.filter(b => String(b.userId) !== String(user.id));
+
+          // Local-only bookmarks for this user
+          const localOnlyBookmarks = prev.filter(b =>
+            String(b.userId) === String(user.id) &&
+            !remoteBookmarks.some(rb => rb.resourceId === b.resourceId)
+          );
+
+          // Upload local-only bookmarks to Supabase in the background
+          if (localOnlyBookmarks.length > 0) {
+            const recordsToInsert = localOnlyBookmarks.map(b => ({
+              user_id: user.id,
+              resource_id: b.resourceId
+            }));
+            (async () => {
+              try {
+                const { error: insertErr } = await supabase
+                  .from('bookmarks')
+                  .insert(recordsToInsert);
+
+                if (insertErr && insertErr.code !== '23505') {
+                  console.warn('Could not sync local-only bookmarks to Supabase:', insertErr.message);
+                }
+              } catch (err: any) {
+                console.warn('Background bookmark sync error:', err);
+              }
+            })();
+          }
+
+          const combined = [...remoteBookmarks, ...localOnlyBookmarks];
+          return [...otherUserBookmarks, ...combined];
+        });
+      }
+    } catch (err: any) {
+      console.warn('Error fetching bookmarks:', err);
+      setBookmarksError(err?.message || 'Failed to load bookmarks');
+    } finally {
+      setIsBookmarksLoading(false);
+    }
+  };
+
+  // Fetch public feedback from public.v_resource_feedback
+  const fetchFeedback = async (): Promise<void> => {
+    if (!isSupabaseConfigured()) {
+      setIsFeedbackLoading(false);
+      return;
+    }
+
+    setIsFeedbackLoading(true);
+    setFeedbackError(null);
+
+    try {
+      const { data, error } = await supabase
+        .from('v_resource_feedback')
+        .select('id, resource_id, user_name, rating, comment, created_at, updated_at, is_author')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.warn('Could not fetch from v_resource_feedback (Stage 2 migration may be pending):', error.message);
+        // Fallback: try raw feedback table
+        const { data: rawData, error: rawError } = await supabase
+          .from('feedback')
+          .select('id, user_id, author_name, resource_id, rating, comment, created_at, updated_at')
+          .order('created_at', { ascending: false });
+
+        if (!rawError && rawData && rawData.length > 0) {
+          const mapped: Feedback[] = rawData.map(f => ({
+            id: Number(f.id),
+            user_id: f.user_id,
+            user_name: f.author_name || 'Kisan Farmer',
+            resource_id: Number(f.resource_id),
+            rating: Number(f.rating),
+            comment: f.comment,
+            created_at: f.created_at,
+            updated_at: f.updated_at,
+            is_author: currentUser ? String(f.user_id) === String(currentUser.id) : false
+          }));
+          setFeedback(mapped);
+          localStorage.setItem('kisan_feedback', JSON.stringify(mapped));
+        } else {
+          setFeedbackError(error.message);
+        }
+      } else if (data && data.length > 0) {
+        const mapped: Feedback[] = data.map(f => ({
+          id: Number(f.id),
+          resource_id: Number(f.resource_id),
+          user_name: f.user_name || 'Kisan Farmer',
+          rating: Number(f.rating),
+          comment: f.comment,
+          created_at: f.created_at,
+          updated_at: f.updated_at,
+          is_author: Boolean(f.is_author)
+        }));
+        setFeedback(mapped);
+        localStorage.setItem('kisan_feedback', JSON.stringify(mapped));
+      }
+    } catch (err: any) {
+      console.warn('Error fetching feedback:', err);
+      setFeedbackError(err?.message || 'Failed to load feedback');
+    } finally {
+      setIsFeedbackLoading(false);
+    }
+  };
+
+  // Fetch rating averages and review counts through public.v_resource_ratings
+  const fetchRatings = async (): Promise<void> => {
+    if (!isSupabaseConfigured()) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('v_resource_ratings')
+        .select('resource_id, avg_rating, review_count');
+
+      if (!error && data && data.length > 0) {
+        const map: Record<number, { avg: number; count: number }> = {};
+        data.forEach(r => {
+          map[Number(r.resource_id)] = {
+            avg: Number(r.avg_rating),
+            count: Number(r.review_count)
+          };
+        });
+        setRatingsFromDb(map);
+      }
+    } catch (err) {
+      console.warn('Could not fetch from v_resource_ratings:', err);
+    }
+  };
+
+  // Synchronize bookmarks and feedback whenever logged-in user changes
+  useEffect(() => {
+    if (currentUser && isValidUuid(currentUser.id)) {
+      fetchBookmarks(currentUser);
+    }
+    fetchFeedback();
+    fetchRatings();
+  }, [currentUser?.id]);
 
   // Save sanitized current user to localStorage (never store passwords!)
   useEffect(() => {
@@ -595,31 +788,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const toggleBookmark = (resourceId: number) => {
+  const toggleBookmark = async (resourceId: number) => {
     if (!currentUser) {
       showToast('Please log in to save resources.', 'warning');
       navigate('/login');
       return;
     }
 
-    const existing = bookmarks.find(
+    const isAlreadyBookmarked = bookmarks.some(
       b => String(b.userId) === String(currentUser.id) && b.resourceId === resourceId
     );
-    if (existing) {
+
+    if (isAlreadyBookmarked) {
+      // Optimistic remove
       setBookmarks(prev =>
         prev.filter(b => !(String(b.userId) === String(currentUser.id) && b.resourceId === resourceId))
       );
       showToast('Removed from saved items.', 'info');
+
+      if (isSupabaseConfigured() && isValidUuid(currentUser.id)) {
+        try {
+          const { error } = await supabase
+            .from('bookmarks')
+            .delete()
+            .eq('user_id', currentUser.id)
+            .eq('resource_id', resourceId);
+
+          if (error) {
+            console.warn('Could not remove bookmark from Supabase:', error.message);
+          }
+        } catch (err) {
+          console.warn('Supabase bookmark delete error:', err);
+        }
+      }
     } else {
-      setBookmarks(prev => [
-        ...prev,
-        { userId: currentUser.id, resourceId, createdAt: new Date().toISOString() }
-      ]);
+      const newBookmark: Bookmark = {
+        userId: currentUser.id,
+        resourceId,
+        createdAt: new Date().toISOString()
+      };
+
+      // Optimistic add
+      setBookmarks(prev => [...prev, newBookmark]);
       showToast('Saved to your Farmer Dashboard!', 'success');
+
+      if (isSupabaseConfigured() && isValidUuid(currentUser.id)) {
+        try {
+          const { error } = await supabase
+            .from('bookmarks')
+            .insert({
+              user_id: currentUser.id,
+              resource_id: resourceId
+            });
+
+          if (error && error.code !== '23505') {
+            console.warn('Could not save bookmark to Supabase:', error.message);
+          }
+        } catch (err) {
+          console.warn('Supabase bookmark insert error:', err);
+        }
+      }
     }
   };
 
-  // Ratings calculation
+  // Ratings calculation - combines DB aggregated view with fallback calculation from feedback array
   const ratingsMap = useMemo(() => {
     const map: Record<number, { sum: number; count: number }> = {};
     feedback.forEach(f => {
@@ -636,50 +868,192 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const { sum, count } = map[id];
       result[id] = { avg: Number((sum / count).toFixed(1)), count };
     });
-    return result;
-  }, [feedback]);
 
-  const addFeedback = (resourceId: number, rating: number, comment: string) => {
+    // Overlay DB aggregated ratings from v_resource_ratings if available
+    Object.entries(ratingsFromDb).forEach(([resIdStr, dbRating]) => {
+      const resId = Number(resIdStr);
+      result[resId] = dbRating;
+    });
+
+    return result;
+  }, [feedback, ratingsFromDb]);
+
+  const editFeedback = async (feedbackId: number, rating: number, comment: string): Promise<void> => {
+    if (!currentUser) {
+      showToast('Please log in to edit your review.', 'warning');
+      navigate('/login');
+      return;
+    }
+
+    const cleanComment = comment.trim();
+    if (cleanComment.length < 2) {
+      showToast('Review comment must be at least 2 characters.', 'warning');
+      return;
+    }
+
+    const cleanRating = Math.max(1, Math.min(5, Math.round(rating)));
+
+    // Optimistic UI update
+    setFeedback(prev =>
+      prev.map(f =>
+        f.id === feedbackId
+          ? {
+              ...f,
+              rating: cleanRating,
+              comment: cleanComment,
+              updated_at: new Date().toISOString()
+            }
+          : f
+      )
+    );
+    showToast(t('review_updated'), 'success');
+
+    // Supabase mutation
+    if (isSupabaseConfigured() && isValidUuid(currentUser.id)) {
+      try {
+        const { error } = await supabase
+          .from('feedback')
+          .update({
+            rating: cleanRating,
+            comment: cleanComment
+          })
+          .eq('id', feedbackId)
+          .eq('user_id', currentUser.id);
+
+        if (error) {
+          console.warn('Could not update feedback in Supabase:', error.message);
+        } else {
+          fetchRatings();
+          fetchFeedback();
+        }
+      } catch (err) {
+        console.warn('Supabase feedback update error:', err);
+      }
+    }
+  };
+
+  const addFeedback = async (resourceId: number, rating: number, comment: string): Promise<void> => {
     if (!currentUser) {
       showToast('Please log in to submit a review.', 'warning');
       navigate('/login');
       return;
     }
 
-    const res = resources.find(r => r.id === resourceId);
+    const cleanComment = comment.trim();
+    if (cleanComment.length < 2) {
+      showToast('Review comment must be at least 2 characters.', 'warning');
+      return;
+    }
+
+    const cleanRating = Math.max(1, Math.min(5, Math.round(rating)));
+
+    // Check if user already reviewed this resource
     const existing = feedback.find(
-      f => String(f.user_id) === String(currentUser.id) && f.resource_id === resourceId
+      f => (f.is_author || (currentUser && String(f.user_id) === String(currentUser.id))) && f.resource_id === resourceId
     );
 
     if (existing) {
-      setFeedback(prev =>
-        prev.map(f =>
-          f.id === existing.id
-            ? { ...f, rating, comment, created_at: new Date().toISOString() }
-            : f
-        )
-      );
-      showToast('Your review was updated!', 'success');
-    } else {
-      const newFeedback: Feedback = {
-        id: Date.now(),
-        user_id: currentUser.id,
-        user_name: currentUser.full_name,
-        username: currentUser.username,
-        resource_id: resourceId,
-        resource_title: res?.title || 'Resource',
-        rating,
-        comment,
-        created_at: new Date().toISOString()
-      };
-      setFeedback(prev => [newFeedback, ...prev]);
-      showToast('Thank you for rating and reviewing this resource!', 'success');
+      await editFeedback(existing.id, cleanRating, cleanComment);
+      return;
+    }
+
+    const res = resources.find(r => r.id === resourceId);
+    const tempId = Date.now();
+    const newFeedback: Feedback = {
+      id: tempId,
+      user_id: currentUser.id,
+      user_name: currentUser.full_name,
+      username: currentUser.username,
+      resource_id: resourceId,
+      resource_title: res?.title || 'Resource',
+      rating: cleanRating,
+      comment: cleanComment,
+      created_at: new Date().toISOString(),
+      is_author: true
+    };
+
+    // Optimistic UI update
+    setFeedback(prev => [newFeedback, ...prev]);
+    showToast(t('review_submitted'), 'success');
+
+    // Supabase mutation
+    if (isSupabaseConfigured() && isValidUuid(currentUser.id)) {
+      try {
+        const { data, error } = await supabase
+          .from('feedback')
+          .insert({
+            user_id: currentUser.id,
+            resource_id: resourceId,
+            author_name: currentUser.full_name,
+            rating: cleanRating,
+            comment: cleanComment
+          })
+          .select('id, user_id, author_name, rating, comment, created_at, updated_at')
+          .single();
+
+        if (error) {
+          if (error.code === '23505') {
+            // Duplicate review: user already has a record in Supabase
+            showToast(t('review_already_submitted'), 'info');
+            await supabase
+              .from('feedback')
+              .update({
+                rating: cleanRating,
+                comment: cleanComment
+              })
+              .eq('user_id', currentUser.id)
+              .eq('resource_id', resourceId);
+          } else {
+            console.warn('Could not save feedback to Supabase:', error.message);
+          }
+        } else if (data) {
+          setFeedback(prev =>
+            prev.map(f =>
+              f.id === tempId
+                ? {
+                    ...f,
+                    id: Number(data.id),
+                    created_at: data.created_at,
+                    updated_at: data.updated_at
+                  }
+                : f
+            )
+          );
+        }
+
+        // Re-sync with views
+        fetchRatings();
+        fetchFeedback();
+      } catch (err) {
+        console.warn('Supabase feedback insert error:', err);
+      }
     }
   };
 
-  const deleteFeedback = (feedbackId: number) => {
+  const deleteFeedback = async (feedbackId: number): Promise<void> => {
+    // Optimistic removal
     setFeedback(prev => prev.filter(f => f.id !== feedbackId));
-    showToast('Feedback entry removed.', 'info');
+    showToast(t('review_deleted'), 'info');
+
+    // Supabase mutation
+    if (isSupabaseConfigured() && currentUser && isValidUuid(currentUser.id)) {
+      try {
+        const { error } = await supabase
+          .from('feedback')
+          .delete()
+          .eq('id', feedbackId)
+          .eq('user_id', currentUser.id);
+
+        if (error) {
+          console.warn('Could not delete feedback from Supabase:', error.message);
+        } else {
+          fetchRatings();
+          fetchFeedback();
+        }
+      } catch (err) {
+        console.warn('Supabase feedback delete error:', err);
+      }
+    }
   };
 
   // Auth: Login flow
@@ -1240,11 +1614,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isAdminModalOpen,
         openAdminModal,
         closeAdminModal,
+        isBookmarksLoading,
+        bookmarksError,
+        refreshBookmarks: async () => {
+          await fetchBookmarks();
+        },
         isBookmarked,
         toggleBookmark,
         bookmarkedIds,
+        isFeedbackLoading,
+        feedbackError,
+        refreshFeedback: async () => {
+          await Promise.all([fetchFeedback(), fetchRatings()]);
+        },
         ratingsMap,
         addFeedback,
+        editFeedback,
         deleteFeedback,
         login,
         register,

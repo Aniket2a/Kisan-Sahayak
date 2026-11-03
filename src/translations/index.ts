@@ -239,6 +239,7 @@ export const TRANSLATIONS: Record<Language, Record<string, string>> = {
     bookmarks_empty_sub: 'Click the bookmark icon on any crop, scheme, or equipment card to save it for quick reference.',
     bookmarks_browse_schemes: 'Browse Schemes',
     bookmarks_browse_crops: 'Browse Crops',
+    loading_bookmarks: 'Loading your saved resources...',
 
     // Profile Page
     profile_badge: 'Cultivator Account',
@@ -305,6 +306,16 @@ export const TRANSLATIONS: Record<Language, Record<string, string>> = {
     modal_out_of_5: 'out of 5 stars',
     modal_review_input_placeholder: 'Share your practical feedback, crop yield results, or loan experience...',
     modal_login_to_review: 'Please log in to rate and review this agricultural resource.',
+    modal_your_review: 'Your Review',
+    modal_edit_review: 'Edit Review',
+    modal_delete_review: 'Delete Review',
+    modal_update_review: 'Update Review',
+    modal_cancel_edit: 'Cancel',
+    loading_reviews: 'Loading reviews...',
+    review_submitted: 'Thank you for rating and reviewing this resource!',
+    review_updated: 'Your review was updated successfully!',
+    review_deleted: 'Review removed successfully.',
+    review_already_submitted: 'You have already reviewed this resource. You can edit your existing review below.',
 
     // Admin
     admin_portal_badge: 'Administrator Portal',
@@ -614,6 +625,7 @@ export const TRANSLATIONS: Record<Language, Record<string, string>> = {
     bookmarks_empty_sub: 'किसी भी फसल, योजना या उपकरण कार्ड पर बुकमार्क आइकन दबाएं ताकि वह यहां तुरंत मिल सके।',
     bookmarks_browse_schemes: 'योजनाएं देखें',
     bookmarks_browse_crops: 'फसलें देखें',
+    loading_bookmarks: 'आपके सहेजे गए संसाधन लोड हो रहे हैं...',
 
     // Profile Page
     profile_badge: 'किसान खाता विवरण',
@@ -680,6 +692,16 @@ export const TRANSLATIONS: Record<Language, Record<string, string>> = {
     modal_out_of_5: 'स्टार में से',
     modal_review_input_placeholder: 'फसल की पैदावार, ऋण मिलने के अनुभव या व्यावहारिक लाभ के बारे में लिखें...',
     modal_login_to_review: 'रेटिंग देने और समीक्षा लिखने के लिए कृपया लॉग इन करें।',
+    modal_your_review: 'आपकी समीक्षा',
+    modal_edit_review: 'समीक्षा संपादित करें',
+    modal_delete_review: 'समीक्षा हटाएं',
+    modal_update_review: 'समीक्षा अपडेट करें',
+    modal_cancel_edit: 'रद्द करें',
+    loading_reviews: 'समीक्षाएं लोड हो रही हैं...',
+    review_submitted: 'रेटिंग और समीक्षा देने के लिए धन्यवाद!',
+    review_updated: 'आपकी समीक्षा सफलतापूर्वक अपडेट की गई!',
+    review_deleted: 'समीक्षा सफलतापूर्वक हटा दी गई।',
+    review_already_submitted: 'आप इस संसाधन की समीक्षा पहले ही कर चुके हैं। आप अपनी मौजूदा समीक्षा को नीचे संपादित कर सकते हैं।',
 
     // Admin
     admin_portal_badge: 'प्रशासक पोर्टल',
@@ -989,6 +1011,7 @@ export const TRANSLATIONS: Record<Language, Record<string, string>> = {
     bookmarks_empty_sub: 'कोणत्याही पिकावर, योजनेवर किंवा अवजारावर बुकमार्क चिन्ह दाबून ती येथे जतन करा.',
     bookmarks_browse_schemes: 'योजना पहा',
     bookmarks_browse_crops: 'पिके पहा',
+    loading_bookmarks: 'तुमची जतन केलेली माहिती लोड होत आहे...',
 
     // Profile Page
     profile_badge: 'शेतकरी खाते तपशील',
@@ -1055,6 +1078,16 @@ export const TRANSLATIONS: Record<Language, Record<string, string>> = {
     modal_out_of_5: 'पैकी',
     modal_review_input_placeholder: 'पीक उत्पादन अनुभव, कर्ज मंजुरी अनुभव किंवा प्रत्यक्ष फायद्याविषयी लिहा...',
     modal_login_to_review: 'रेटिंग देण्यासाठी व अभिप्राय नोंदवण्यासाठी कृपया लॉग इन करा.',
+    modal_your_review: 'तुमचे मत',
+    modal_edit_review: 'पुनरावलोकन संपादित करा',
+    modal_delete_review: 'पुनरावलोकन हटवा',
+    modal_update_review: 'पुनरावलोकन अपडेट करा',
+    modal_cancel_edit: 'रद्द करा',
+    loading_reviews: 'पुनरावलोकने लोड होत आहेत...',
+    review_submitted: 'रेटिंग आणि अभिप्राय दिल्याबद्दल धन्यवाद!',
+    review_updated: 'तुमचा अभिप्राय यशस्वीरीत्या अद्यतनित केला!',
+    review_deleted: 'अभिप्राय यशस्वीरीत्या काढला गेला.',
+    review_already_submitted: 'तुम्ही या संसाधनाचे पुनरावलोकन आधीच केले आहे. तुम्ही खाली तुमचे विद्यमान पुनरावलोकन संपादित करू शकता.',
 
     // Admin
     admin_portal_badge: 'प्रशासक पोर्टल',

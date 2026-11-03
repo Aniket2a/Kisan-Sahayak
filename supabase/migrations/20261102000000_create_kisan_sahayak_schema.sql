@@ -1,5 +1,5 @@
 -- ============================================================================
--- KISAN SAHAYAK — STAGE 2 PRODUCTION DATABASE MIGRATION
+-- KISAN SAHAYAK — STAGE 2 PRODUCTION DATABASE MIGRATION (AUDITED & HARDENED)
 -- Migration: 20261102000000_create_kisan_sahayak_schema.sql
 -- Target Database: Supabase PostgreSQL 15+
 -- ============================================================================
@@ -157,6 +157,11 @@ CREATE TABLE IF NOT EXISTS public._kisan_migration_manifest (
   pre_existing_definitions jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 
+-- Enable RLS and lock manifest immediately to trusted administrative roles only
+ALTER TABLE public._kisan_migration_manifest ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public._kisan_migration_manifest FROM PUBLIC, anon, authenticated;
+GRANT ALL ON TABLE public._kisan_migration_manifest TO postgres, service_role;
+
 CREATE TEMPORARY TABLE _kisan_inventory (
   obj_name text PRIMARY KEY,
   obj_type text NOT NULL,
@@ -175,6 +180,7 @@ VALUES
   ('comments', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='comments')),
   ('post_likes', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='post_likes')),
   ('audit_logs', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='audit_logs')),
+  ('_kisan_migration_manifest', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='_kisan_migration_manifest')),
   -- Views
   ('v_community_posts', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_community_posts')),
   ('v_community_comments', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_community_comments')),
@@ -190,7 +196,16 @@ VALUES
   ('fn_protect_post_mutations', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_protect_post_mutations' AND pronamespace='public'::regnamespace)),
   ('fn_stamp_comment_author_snapshot', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_stamp_comment_author_snapshot' AND pronamespace='public'::regnamespace)),
   ('fn_protect_comment_mutations', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_protect_comment_mutations' AND pronamespace='public'::regnamespace)),
-  ('fn_increment_resource_view', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_increment_resource_view' AND pronamespace='public'::regnamespace));
+  ('fn_increment_resource_view', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_increment_resource_view' AND pronamespace='public'::regnamespace)),
+  -- Triggers
+  ('trg_protect_profile_mutations', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_protect_profile_mutations')),
+  ('trg_on_auth_user_created', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_on_auth_user_created')),
+  ('trg_stamp_feedback_author', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_stamp_feedback_author')),
+  ('trg_protect_feedback_mutations', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_protect_feedback_mutations')),
+  ('trg_stamp_post_author', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_stamp_post_author')),
+  ('trg_protect_post_mutations', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_protect_post_mutations')),
+  ('trg_stamp_comment_author', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_stamp_comment_author')),
+  ('trg_protect_comment_mutations', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_protect_comment_mutations'));
 
 -- ----------------------------------------------------------------------------
 -- 2. PROFILES TABLE & MULTI-LAYER ROLE ESCALATION PROTECTION
@@ -239,11 +254,19 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_protect_profile_mutations ON public.profiles;
-CREATE TRIGGER trg_protect_profile_mutations
-  BEFORE UPDATE ON public.profiles
-  FOR EACH ROW
-  EXECUTE FUNCTION public.fn_protect_profile_mutations();
+-- Idempotent Trigger Creation: Protect existing triggers without blind drops
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'trg_protect_profile_mutations'
+  ) THEN
+    EXECUTE 'CREATE TRIGGER trg_protect_profile_mutations
+      BEFORE UPDATE ON public.profiles
+      FOR EACH ROW
+      EXECUTE FUNCTION public.fn_protect_profile_mutations()';
+  END IF;
+END $$;
 
 -- Function: Privileged server-side role assignment (Service Role only)
 CREATE OR REPLACE FUNCTION public.admin_set_user_role(
@@ -327,11 +350,19 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_on_auth_user_created ON auth.users;
-CREATE TRIGGER trg_on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW
-  EXECUTE FUNCTION public.fn_handle_new_auth_user();
+-- Idempotent Trigger Creation on auth.users: Non-destructive
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'trg_on_auth_user_created'
+  ) THEN
+    EXECUTE 'CREATE TRIGGER trg_on_auth_user_created
+      AFTER INSERT ON auth.users
+      FOR EACH ROW
+      EXECUTE FUNCTION public.fn_handle_new_auth_user()';
+  END IF;
+END $$;
 
 -- ----------------------------------------------------------------------------
 -- 3. APPLICATION TABLES
@@ -419,11 +450,19 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_stamp_feedback_author ON public.feedback;
-CREATE TRIGGER trg_stamp_feedback_author
-  BEFORE INSERT ON public.feedback
-  FOR EACH ROW
-  EXECUTE FUNCTION public.fn_stamp_feedback_author_snapshot();
+-- Idempotent Trigger Creation: Feedback stamping
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'trg_stamp_feedback_author'
+  ) THEN
+    EXECUTE 'CREATE TRIGGER trg_stamp_feedback_author
+      BEFORE INSERT ON public.feedback
+      FOR EACH ROW
+      EXECUTE FUNCTION public.fn_stamp_feedback_author_snapshot()';
+  END IF;
+END $$;
 
 CREATE OR REPLACE FUNCTION public.fn_protect_feedback_mutations()
 RETURNS trigger
@@ -441,11 +480,19 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_protect_feedback_mutations ON public.feedback;
-CREATE TRIGGER trg_protect_feedback_mutations
-  BEFORE UPDATE ON public.feedback
-  FOR EACH ROW
-  EXECUTE FUNCTION public.fn_protect_feedback_mutations();
+-- Idempotent Trigger Creation: Feedback mutation protection
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'trg_protect_feedback_mutations'
+  ) THEN
+    EXECUTE 'CREATE TRIGGER trg_protect_feedback_mutations
+      BEFORE UPDATE ON public.feedback
+      FOR EACH ROW
+      EXECUTE FUNCTION public.fn_protect_feedback_mutations()';
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS public.community_posts (
   id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
@@ -488,11 +535,19 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_stamp_post_author ON public.community_posts;
-CREATE TRIGGER trg_stamp_post_author
-  BEFORE INSERT ON public.community_posts
-  FOR EACH ROW
-  EXECUTE FUNCTION public.fn_stamp_post_author_snapshot();
+-- Idempotent Trigger Creation: Post author snapshot
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'trg_stamp_post_author'
+  ) THEN
+    EXECUTE 'CREATE TRIGGER trg_stamp_post_author
+      BEFORE INSERT ON public.community_posts
+      FOR EACH ROW
+      EXECUTE FUNCTION public.fn_stamp_post_author_snapshot()';
+  END IF;
+END $$;
 
 CREATE OR REPLACE FUNCTION public.fn_protect_post_mutations()
 RETURNS trigger
@@ -509,11 +564,19 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_protect_post_mutations ON public.community_posts;
-CREATE TRIGGER trg_protect_post_mutations
-  BEFORE UPDATE ON public.community_posts
-  FOR EACH ROW
-  EXECUTE FUNCTION public.fn_protect_post_mutations();
+-- Idempotent Trigger Creation: Post mutation protection
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'trg_protect_post_mutations'
+  ) THEN
+    EXECUTE 'CREATE TRIGGER trg_protect_post_mutations
+      BEFORE UPDATE ON public.community_posts
+      FOR EACH ROW
+      EXECUTE FUNCTION public.fn_protect_post_mutations()';
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS public.comments (
   id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
@@ -553,11 +616,19 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_stamp_comment_author ON public.comments;
-CREATE TRIGGER trg_stamp_comment_author
-  BEFORE INSERT ON public.comments
-  FOR EACH ROW
-  EXECUTE FUNCTION public.fn_stamp_comment_author_snapshot();
+-- Idempotent Trigger Creation: Comment author snapshot
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'trg_stamp_comment_author'
+  ) THEN
+    EXECUTE 'CREATE TRIGGER trg_stamp_comment_author
+      BEFORE INSERT ON public.comments
+      FOR EACH ROW
+      EXECUTE FUNCTION public.fn_stamp_comment_author_snapshot()';
+  END IF;
+END $$;
 
 CREATE OR REPLACE FUNCTION public.fn_protect_comment_mutations()
 RETURNS trigger
@@ -576,11 +647,19 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_protect_comment_mutations ON public.comments;
-CREATE TRIGGER trg_protect_comment_mutations
-  BEFORE UPDATE ON public.comments
-  FOR EACH ROW
-  EXECUTE FUNCTION public.fn_protect_comment_mutations();
+-- Idempotent Trigger Creation: Comment mutation protection
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'trg_protect_comment_mutations'
+  ) THEN
+    EXECUTE 'CREATE TRIGGER trg_protect_comment_mutations
+      BEFORE UPDATE ON public.comments
+      FOR EACH ROW
+      EXECUTE FUNCTION public.fn_protect_comment_mutations()';
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS public.post_likes (
   post_id bigint NOT NULL REFERENCES public.community_posts(id) ON DELETE CASCADE,
@@ -696,6 +775,7 @@ $$;
 
 -- ----------------------------------------------------------------------------
 -- 6. ROW LEVEL SECURITY (RLS) POLICIES
+-- Idempotent, non-destructive policy configuration for all tables
 -- ----------------------------------------------------------------------------
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.categories ENABLE ROW LEVEL SECURITY;
@@ -706,106 +786,115 @@ ALTER TABLE public.community_posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.comments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.post_likes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public._kisan_migration_manifest ENABLE ROW LEVEL SECURITY;
 
--- Profiles
-DROP POLICY IF EXISTS "profiles_select_own" ON public.profiles;
-CREATE POLICY "profiles_select_own" ON public.profiles
-  FOR SELECT TO authenticated USING (id = auth.uid());
+DO $$
+BEGIN
+  -- Profiles policies
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'profiles' AND policyname = 'profiles_select_own') THEN
+    EXECUTE 'CREATE POLICY "profiles_select_own" ON public.profiles FOR SELECT TO authenticated USING (id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "profiles_update_own" ON public.profiles;
-CREATE POLICY "profiles_update_own" ON public.profiles
-  FOR UPDATE TO authenticated USING (id = auth.uid()) WITH CHECK (id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'profiles' AND policyname = 'profiles_update_own') THEN
+    EXECUTE 'CREATE POLICY "profiles_update_own" ON public.profiles FOR UPDATE TO authenticated USING (id = auth.uid()) WITH CHECK (id = auth.uid())';
+  END IF;
 
--- Categories
-DROP POLICY IF EXISTS "categories_read_public" ON public.categories;
-CREATE POLICY "categories_read_public" ON public.categories
-  FOR SELECT TO anon, authenticated USING (true);
+  -- Categories policies
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'categories' AND policyname = 'categories_read_public') THEN
+    EXECUTE 'CREATE POLICY "categories_read_public" ON public.categories FOR SELECT TO anon, authenticated USING (true)';
+  END IF;
 
--- Resources
-DROP POLICY IF EXISTS "resources_read_public" ON public.resources;
-CREATE POLICY "resources_read_public" ON public.resources
-  FOR SELECT TO anon, authenticated USING (true);
+  -- Resources policies
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'resources' AND policyname = 'resources_read_public') THEN
+    EXECUTE 'CREATE POLICY "resources_read_public" ON public.resources FOR SELECT TO anon, authenticated USING (true)';
+  END IF;
 
--- Bookmarks
-DROP POLICY IF EXISTS "bookmarks_select_own" ON public.bookmarks;
-CREATE POLICY "bookmarks_select_own" ON public.bookmarks
-  FOR SELECT TO authenticated USING (user_id = auth.uid());
+  -- Bookmarks policies
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bookmarks' AND policyname = 'bookmarks_select_own') THEN
+    EXECUTE 'CREATE POLICY "bookmarks_select_own" ON public.bookmarks FOR SELECT TO authenticated USING (user_id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "bookmarks_insert_own" ON public.bookmarks;
-CREATE POLICY "bookmarks_insert_own" ON public.bookmarks
-  FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bookmarks' AND policyname = 'bookmarks_insert_own') THEN
+    EXECUTE 'CREATE POLICY "bookmarks_insert_own" ON public.bookmarks FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "bookmarks_delete_own" ON public.bookmarks;
-CREATE POLICY "bookmarks_delete_own" ON public.bookmarks
-  FOR DELETE TO authenticated USING (user_id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bookmarks' AND policyname = 'bookmarks_delete_own') THEN
+    EXECUTE 'CREATE POLICY "bookmarks_delete_own" ON public.bookmarks FOR DELETE TO authenticated USING (user_id = auth.uid())';
+  END IF;
 
--- Feedback
-DROP POLICY IF EXISTS "feedback_select_own" ON public.feedback;
-CREATE POLICY "feedback_select_own" ON public.feedback
-  FOR SELECT TO authenticated USING (user_id = auth.uid());
+  -- Feedback policies
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'feedback' AND policyname = 'feedback_select_own') THEN
+    EXECUTE 'CREATE POLICY "feedback_select_own" ON public.feedback FOR SELECT TO authenticated USING (user_id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "feedback_insert_own" ON public.feedback;
-CREATE POLICY "feedback_insert_own" ON public.feedback
-  FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'feedback' AND policyname = 'feedback_insert_own') THEN
+    EXECUTE 'CREATE POLICY "feedback_insert_own" ON public.feedback FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "feedback_update_own" ON public.feedback;
-CREATE POLICY "feedback_update_own" ON public.feedback
-  FOR UPDATE TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'feedback' AND policyname = 'feedback_update_own') THEN
+    EXECUTE 'CREATE POLICY "feedback_update_own" ON public.feedback FOR UPDATE TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "feedback_delete_own" ON public.feedback;
-CREATE POLICY "feedback_delete_own" ON public.feedback
-  FOR DELETE TO authenticated USING (user_id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'feedback' AND policyname = 'feedback_delete_own') THEN
+    EXECUTE 'CREATE POLICY "feedback_delete_own" ON public.feedback FOR DELETE TO authenticated USING (user_id = auth.uid())';
+  END IF;
 
--- Community Posts
-DROP POLICY IF EXISTS "posts_select_own" ON public.community_posts;
-CREATE POLICY "posts_select_own" ON public.community_posts
-  FOR SELECT TO authenticated USING (user_id = auth.uid());
+  -- Community Posts policies
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'community_posts' AND policyname = 'posts_select_own') THEN
+    EXECUTE 'CREATE POLICY "posts_select_own" ON public.community_posts FOR SELECT TO authenticated USING (user_id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "posts_insert_own" ON public.community_posts;
-CREATE POLICY "posts_insert_own" ON public.community_posts
-  FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'community_posts' AND policyname = 'posts_insert_own') THEN
+    EXECUTE 'CREATE POLICY "posts_insert_own" ON public.community_posts FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "posts_update_own" ON public.community_posts;
-CREATE POLICY "posts_update_own" ON public.community_posts
-  FOR UPDATE TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'community_posts' AND policyname = 'posts_update_own') THEN
+    EXECUTE 'CREATE POLICY "posts_update_own" ON public.community_posts FOR UPDATE TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "posts_delete_own" ON public.community_posts;
-CREATE POLICY "posts_delete_own" ON public.community_posts
-  FOR DELETE TO authenticated USING (user_id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'community_posts' AND policyname = 'posts_delete_own') THEN
+    EXECUTE 'CREATE POLICY "posts_delete_own" ON public.community_posts FOR DELETE TO authenticated USING (user_id = auth.uid())';
+  END IF;
 
--- Comments
-DROP POLICY IF EXISTS "comments_select_own" ON public.comments;
-CREATE POLICY "comments_select_own" ON public.comments
-  FOR SELECT TO authenticated USING (user_id = auth.uid());
+  -- Comments policies
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'comments' AND policyname = 'comments_select_own') THEN
+    EXECUTE 'CREATE POLICY "comments_select_own" ON public.comments FOR SELECT TO authenticated USING (user_id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "comments_insert_own" ON public.comments;
-CREATE POLICY "comments_insert_own" ON public.comments
-  FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'comments' AND policyname = 'comments_insert_own') THEN
+    EXECUTE 'CREATE POLICY "comments_insert_own" ON public.comments FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "comments_update_own" ON public.comments;
-CREATE POLICY "comments_update_own" ON public.comments
-  FOR UPDATE TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'comments' AND policyname = 'comments_update_own') THEN
+    EXECUTE 'CREATE POLICY "comments_update_own" ON public.comments FOR UPDATE TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "comments_delete_own" ON public.comments;
-CREATE POLICY "comments_delete_own" ON public.comments
-  FOR DELETE TO authenticated USING (user_id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'comments' AND policyname = 'comments_delete_own') THEN
+    EXECUTE 'CREATE POLICY "comments_delete_own" ON public.comments FOR DELETE TO authenticated USING (user_id = auth.uid())';
+  END IF;
 
--- Post Likes
-DROP POLICY IF EXISTS "likes_select_own" ON public.post_likes;
-CREATE POLICY "likes_select_own" ON public.post_likes
-  FOR SELECT TO authenticated USING (user_id = auth.uid());
+  -- Post Likes policies
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'post_likes' AND policyname = 'likes_select_own') THEN
+    EXECUTE 'CREATE POLICY "likes_select_own" ON public.post_likes FOR SELECT TO authenticated USING (user_id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "likes_insert_own" ON public.post_likes;
-CREATE POLICY "likes_insert_own" ON public.post_likes
-  FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'post_likes' AND policyname = 'likes_insert_own') THEN
+    EXECUTE 'CREATE POLICY "likes_insert_own" ON public.post_likes FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid())';
+  END IF;
 
-DROP POLICY IF EXISTS "likes_delete_own" ON public.post_likes;
-CREATE POLICY "likes_delete_own" ON public.post_likes
-  FOR DELETE TO authenticated USING (user_id = auth.uid());
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'post_likes' AND policyname = 'likes_delete_own') THEN
+    EXECUTE 'CREATE POLICY "likes_delete_own" ON public.post_likes FOR DELETE TO authenticated USING (user_id = auth.uid())';
+  END IF;
+
+  -- Manifest policy: Access restricted to service role and database administrator
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = '_kisan_migration_manifest' AND policyname = 'manifest_admin_service_role_only') THEN
+    EXECUTE 'CREATE POLICY "manifest_admin_service_role_only" ON public._kisan_migration_manifest FOR ALL TO service_role USING (true) WITH CHECK (true)';
+  END IF;
+END $$;
 
 -- ----------------------------------------------------------------------------
--- 7. STRICTLY SCOPED SQL GRANTS & REVOKES
--- Targets explicitly identified Kisan Sahayak objects only
+-- 7. AUDITED SQL GRANTS & REVOKES
+-- Precise least-privilege scoping across all tables, views, functions & sequences
 -- ----------------------------------------------------------------------------
 -- 7.1 Specific Table Revocations
 REVOKE ALL ON public.profiles FROM PUBLIC, anon, authenticated;
@@ -817,27 +906,51 @@ REVOKE ALL ON public.community_posts FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON public.comments FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON public.post_likes FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON public.audit_logs FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE public._kisan_migration_manifest FROM PUBLIC, anon, authenticated;
 
--- 7.2 Specific Function Revocations
-REVOKE EXECUTE ON FUNCTION public.fn_protect_profile_mutations() FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.admin_set_user_role(uuid, text) FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.fn_handle_new_auth_user() FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.fn_stamp_feedback_author_snapshot() FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.fn_protect_feedback_mutations() FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.fn_stamp_post_author_snapshot() FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.fn_protect_post_mutations() FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.fn_stamp_comment_author_snapshot() FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.fn_protect_comment_mutations() FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.fn_increment_resource_view(bigint) FROM PUBLIC, anon, authenticated;
+-- 7.2 Specific View Revocations (Prevent default PUBLIC view access)
+REVOKE ALL ON public.v_community_posts FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.v_community_comments FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.v_resource_feedback FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.v_resource_ratings FROM PUBLIC, anon, authenticated;
 
--- 7.3 Specific Sequence Revocations
-REVOKE ALL ON SEQUENCE public.categories_id_seq FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON SEQUENCE public.resources_id_seq FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON SEQUENCE public.feedback_id_seq FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON SEQUENCE public.community_posts_id_seq FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON SEQUENCE public.comments_id_seq FROM PUBLIC, anon, authenticated;
+-- 7.3 Specific Function Revocations
+REVOKE ALL ON FUNCTION public.fn_protect_profile_mutations() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.admin_set_user_role(uuid, text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.fn_handle_new_auth_user() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.fn_stamp_feedback_author_snapshot() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.fn_protect_feedback_mutations() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.fn_stamp_post_author_snapshot() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.fn_protect_post_mutations() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.fn_stamp_comment_author_snapshot() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.fn_protect_comment_mutations() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.fn_increment_resource_view(bigint) FROM PUBLIC, anon, authenticated;
 
--- 7.4 Anonymous Grants
+-- 7.4 Specific Sequence Permissions (Safe dynamic check)
+DO $$
+DECLARE
+  v_seq text;
+  v_seqs text[] := ARRAY[
+    'categories_id_seq', 'resources_id_seq', 'feedback_id_seq',
+    'community_posts_id_seq', 'comments_id_seq'
+  ];
+BEGIN
+  FOREACH v_seq IN ARRAY v_seqs LOOP
+    IF EXISTS (
+      SELECT 1 FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = v_seq AND c.relkind = 'S'
+    ) THEN
+      EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM PUBLIC, anon, authenticated;', v_seq);
+      EXECUTE format('GRANT ALL PRIVILEGES ON SEQUENCE public.%I TO postgres, service_role;', v_seq);
+      IF v_seq IN ('feedback_id_seq', 'community_posts_id_seq', 'comments_id_seq') THEN
+        EXECUTE format('GRANT USAGE ON SEQUENCE public.%I TO authenticated;', v_seq);
+      END IF;
+    END IF;
+  END LOOP;
+END $$;
+
+-- 7.5 Anonymous Grants (Public Read on non-sensitive data & barrier views)
 GRANT SELECT ON public.categories TO anon;
 GRANT SELECT ON public.resources TO anon;
 GRANT SELECT ON public.v_community_posts TO anon;
@@ -845,7 +958,7 @@ GRANT SELECT ON public.v_community_comments TO anon;
 GRANT SELECT ON public.v_resource_feedback TO anon;
 GRANT SELECT ON public.v_resource_ratings TO anon;
 
--- 7.5 Authenticated Grants
+-- 7.6 Authenticated Farmer Grants
 GRANT SELECT ON public.profiles TO authenticated;
 GRANT UPDATE (full_name, state, preferred_category) ON public.profiles TO authenticated;
 
@@ -870,29 +983,36 @@ GRANT SELECT ON public.v_community_comments TO authenticated;
 GRANT SELECT ON public.v_resource_feedback TO authenticated;
 GRANT SELECT ON public.v_resource_ratings TO authenticated;
 
-GRANT USAGE ON SEQUENCE public.feedback_id_seq TO authenticated;
-GRANT USAGE ON SEQUENCE public.community_posts_id_seq TO authenticated;
-GRANT USAGE ON SEQUENCE public.comments_id_seq TO authenticated;
+-- Trigger functions execution permission for DML trigger evaluation
+GRANT EXECUTE ON FUNCTION public.fn_protect_profile_mutations() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_stamp_feedback_author_snapshot() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_protect_feedback_mutations() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_stamp_post_author_snapshot() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_protect_post_mutations() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_stamp_comment_author_snapshot() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_protect_comment_mutations() TO authenticated;
 
--- 7.6 Service Role Grants
-GRANT ALL PRIVILEGES ON public.profiles TO service_role;
-GRANT ALL PRIVILEGES ON public.categories TO service_role;
-GRANT ALL PRIVILEGES ON public.resources TO service_role;
-GRANT ALL PRIVILEGES ON public.bookmarks TO service_role;
-GRANT ALL PRIVILEGES ON public.feedback TO service_role;
-GRANT ALL PRIVILEGES ON public.community_posts TO service_role;
-GRANT ALL PRIVILEGES ON public.comments TO service_role;
-GRANT ALL PRIVILEGES ON public.post_likes TO service_role;
-GRANT ALL PRIVILEGES ON public.audit_logs TO service_role;
+-- 7.7 Trusted Database Administrator & Service Role Grants
+GRANT ALL PRIVILEGES ON public._kisan_migration_manifest TO postgres, service_role;
+GRANT ALL PRIVILEGES ON public.profiles TO postgres, service_role;
+GRANT ALL PRIVILEGES ON public.categories TO postgres, service_role;
+GRANT ALL PRIVILEGES ON public.resources TO postgres, service_role;
+GRANT ALL PRIVILEGES ON public.bookmarks TO postgres, service_role;
+GRANT ALL PRIVILEGES ON public.feedback TO postgres, service_role;
+GRANT ALL PRIVILEGES ON public.community_posts TO postgres, service_role;
+GRANT ALL PRIVILEGES ON public.comments TO postgres, service_role;
+GRANT ALL PRIVILEGES ON public.post_likes TO postgres, service_role;
+GRANT ALL PRIVILEGES ON public.audit_logs TO postgres, service_role;
 
-GRANT ALL PRIVILEGES ON SEQUENCE public.categories_id_seq TO service_role;
-GRANT ALL PRIVILEGES ON SEQUENCE public.resources_id_seq TO service_role;
-GRANT ALL PRIVILEGES ON SEQUENCE public.feedback_id_seq TO service_role;
-GRANT ALL PRIVILEGES ON SEQUENCE public.community_posts_id_seq TO service_role;
-GRANT ALL PRIVILEGES ON SEQUENCE public.comments_id_seq TO service_role;
+GRANT ALL PRIVILEGES ON public.v_community_posts TO postgres, service_role;
+GRANT ALL PRIVILEGES ON public.v_community_comments TO postgres, service_role;
+GRANT ALL PRIVILEGES ON public.v_resource_feedback TO postgres, service_role;
+GRANT ALL PRIVILEGES ON public.v_resource_ratings TO postgres, service_role;
 
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO postgres;
 GRANT EXECUTE ON FUNCTION public.fn_increment_resource_view(bigint) TO service_role;
 GRANT EXECUTE ON FUNCTION public.admin_set_user_role(uuid, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.fn_handle_new_auth_user() TO postgres, service_role;
 
 -- ----------------------------------------------------------------------------
 -- 8. RECORD OWNERSHIP IN MANIFEST
@@ -911,20 +1031,6 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- Add triggers to created list if their tables were created
-  IF NOT EXISTS (SELECT 1 FROM _kisan_inventory WHERE obj_name = 'profiles' AND pre_existed = true) THEN
-    v_created := array_cat(v_created, ARRAY['trg_protect_profile_mutations', 'trg_on_auth_user_created']);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM _kisan_inventory WHERE obj_name = 'feedback' AND pre_existed = true) THEN
-    v_created := array_cat(v_created, ARRAY['trg_stamp_feedback_author', 'trg_protect_feedback_mutations']);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM _kisan_inventory WHERE obj_name = 'community_posts' AND pre_existed = true) THEN
-    v_created := array_cat(v_created, ARRAY['trg_stamp_post_author', 'trg_protect_post_mutations']);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM _kisan_inventory WHERE obj_name = 'comments' AND pre_existed = true) THEN
-    v_created := array_cat(v_created, ARRAY['trg_stamp_comment_author', 'trg_protect_comment_mutations']);
-  END IF;
-
   INSERT INTO public._kisan_migration_manifest (
     migration_id, created_objects, reused_objects, unknown_objects
   ) VALUES (
@@ -933,7 +1039,11 @@ BEGIN
     to_jsonb(v_reused),
     '[]'::jsonb
   )
-  ON CONFLICT (migration_id) DO NOTHING;
+  ON CONFLICT (migration_id) DO UPDATE SET
+    applied_at = timezone('utc'::text, now()),
+    applied_by = current_user,
+    created_objects = EXCLUDED.created_objects,
+    reused_objects = EXCLUDED.reused_objects;
 END $$;
 
 COMMIT;

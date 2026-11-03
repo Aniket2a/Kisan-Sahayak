@@ -3,7 +3,7 @@ import { useApp } from '../context/AppContext';
 import { ResourceCard } from '../components/ResourceCard';
 
 export const DashboardPage: React.FC = () => {
-  const { currentUser, resources, bookmarkedIds, communityPosts, comments, navigate, t, tc } = useApp();
+  const { currentUser, resources, bookmarkedIds, isBookmarksLoading, communityPosts, comments, navigate, t, tc } = useApp();
 
   if (!currentUser) {
     return (
@@ -195,14 +195,19 @@ export const DashboardPage: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
             <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--forest-dark)', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <i className="fa-solid fa-bookmark" style={{ color: 'var(--amber-warm)' }}></i>
-              {t('dash_saved_box')} ({bookmarkedIds.length})
+              {t('dash_saved_box')} {isBookmarksLoading ? '' : `(${bookmarkedIds.length})`}
             </h3>
             <button onClick={() => navigate('/bookmarks')} className="btn btn-secondary btn-sm">
               {t('dash_view_all')}
             </button>
           </div>
 
-          {savedResources.length > 0 ? (
+          {isBookmarksLoading ? (
+            <div style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-muted)' }}>
+              <i className="fa-solid fa-spinner fa-spin" style={{ color: 'var(--primary-green)', marginRight: '0.5rem' }}></i>
+              <span style={{ fontSize: '0.88rem' }}>{t('loading_bookmarks')}</span>
+            </div>
+          ) : savedResources.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               {savedResources.map(item => (
                 <div

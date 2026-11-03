@@ -10,7 +10,10 @@ export const ResourceDetailsModal: React.FC = () => {
     toggleBookmark,
     ratingsMap,
     feedback,
+    isFeedbackLoading,
     addFeedback,
+    editFeedback,
+    deleteFeedback,
     currentUser,
     t,
     tc,
@@ -19,6 +22,7 @@ export const ResourceDetailsModal: React.FC = () => {
 
   const [rating, setRating] = useState<number>(5);
   const [comment, setComment] = useState<string>('');
+  const [editingId, setEditingId] = useState<number | null>(null);
   const backdropMouseDownRef = useRef(false);
 
   // Reset rating and comment when a new resource is opened
@@ -26,6 +30,7 @@ export const ResourceDetailsModal: React.FC = () => {
     if (selectedResource) {
       setRating(5);
       setComment('');
+      setEditingId(null);
     }
   }, [selectedResource?.id]);
 
@@ -57,11 +62,18 @@ export const ResourceDetailsModal: React.FC = () => {
   const ratingInfo = ratingsMap[loc.id] || { avg: 5.0, count: 1 };
   const resourceFeedback = feedback.filter(f => f.resource_id === loc.id);
 
-  const handleSubmitReview = (e: React.FormEvent) => {
+  const handleSubmitReview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!comment.trim()) return;
-    addFeedback(selectedResource.id, rating, comment);
+
+    if (editingId) {
+      await editFeedback(editingId, rating, comment);
+      setEditingId(null);
+    } else {
+      await addFeedback(selectedResource.id, rating, comment);
+    }
     setComment('');
+    setRating(5);
   };
 
   const handleBackdropMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -300,32 +312,82 @@ export const ResourceDetailsModal: React.FC = () => {
             </div>
 
             {/* List of reviews */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem', maxHeight: '200px', overflowY: 'auto' }}>
-              {resourceFeedback.length > 0 ? (
-                resourceFeedback.map(fb => (
-                  <div
-                    key={fb.id}
-                    style={{
-                      background: '#f8fafc',
-                      border: '1px solid var(--border-light)',
-                      borderRadius: 'var(--radius-sm)',
-                      padding: '0.75rem 1rem'
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                      <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--forest-dark)' }}>
-                        <i className="fa-solid fa-user-circle" style={{ marginRight: '0.3rem' }}></i>
-                        {fb.user_name}
-                      </span>
-                      <span style={{ color: '#f59e0b', fontSize: '0.75rem' }}>
-                        {'★'.repeat(fb.rating)}{'☆'.repeat(5 - fb.rating)}
-                      </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem', maxHeight: '220px', overflowY: 'auto' }}>
+              {isFeedbackLoading && resourceFeedback.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '1rem', color: 'var(--text-muted)' }}>
+                  <i className="fa-solid fa-spinner fa-spin" style={{ color: 'var(--primary-green)', marginRight: '0.5rem' }}></i>
+                  <span style={{ fontSize: '0.85rem' }}>{t('loading_reviews')}</span>
+                </div>
+              ) : resourceFeedback.length > 0 ? (
+                resourceFeedback.map(fb => {
+                  const isAuthor = Boolean(fb.is_author || (currentUser && String(fb.user_id) === String(currentUser.id)));
+                  return (
+                    <div
+                      key={fb.id}
+                      style={{
+                        background: isAuthor ? '#f0fdf4' : '#f8fafc',
+                        border: isAuthor ? '1px solid #bbf7d0' : '1px solid var(--border-light)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '0.75rem 1rem'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem', flexWrap: 'wrap', gap: '0.25rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--forest-dark)' }}>
+                            <i className="fa-solid fa-user-circle" style={{ marginRight: '0.3rem' }}></i>
+                            {fb.user_name}
+                          </span>
+                          {isAuthor && (
+                            <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.4rem', backgroundColor: 'var(--mint-subtle)', color: 'var(--primary-green)', borderRadius: '4px', fontWeight: 600 }}>
+                              {t('modal_your_review')}
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <span style={{ color: '#f59e0b', fontSize: '0.75rem' }}>
+                            {'★'.repeat(fb.rating)}{'☆'.repeat(5 - fb.rating)}
+                          </span>
+
+                          {isAuthor && (
+                            <div style={{ display: 'flex', gap: '0.35rem' }}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingId(fb.id);
+                                  setRating(fb.rating);
+                                  setComment(fb.comment);
+                                }}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--forest-dark)', fontSize: '0.8rem', padding: '0.1rem 0.3rem' }}
+                                title={t('modal_edit_review')}
+                              >
+                                <i className="fa-solid fa-pen-to-square"></i>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  deleteFeedback(fb.id);
+                                  if (editingId === fb.id) {
+                                    setEditingId(null);
+                                    setComment('');
+                                    setRating(5);
+                                  }
+                                }}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', fontSize: '0.8rem', padding: '0.1rem 0.3rem' }}
+                                title={t('modal_delete_review')}
+                              >
+                                <i className="fa-solid fa-trash-can"></i>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <p style={{ fontSize: '0.85rem', color: 'var(--text-main)', margin: 0 }}>
+                        {fb.comment}
+                      </p>
                     </div>
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-main)', margin: 0 }}>
-                      {fb.comment}
-                    </p>
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
                   {t('modal_no_reviews')}
@@ -333,12 +395,29 @@ export const ResourceDetailsModal: React.FC = () => {
               )}
             </div>
 
-            {/* Add Review Form */}
+            {/* Add or Edit Review Form */}
             {currentUser ? (
               <form onSubmit={handleSubmitReview} style={{ background: 'var(--mint-bg)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-green)' }}>
-                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--forest-dark)', marginBottom: '0.6rem' }}>
-                  {t('modal_rate_heading')}
-                </h4>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+                  <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--forest-dark)', margin: 0 }}>
+                    {editingId ? t('modal_edit_review') : t('modal_rate_heading')}
+                  </h4>
+                  {editingId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingId(null);
+                        setComment('');
+                        setRating(5);
+                      }}
+                      className="btn btn-secondary btn-sm"
+                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
+                    >
+                      {t('modal_cancel_edit')}
+                    </button>
+                  )}
+                </div>
+
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
                   <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{t('modal_your_rating')}</span>
                   <div style={{ display: 'flex', gap: '0.35rem' }}>
@@ -381,7 +460,8 @@ export const ResourceDetailsModal: React.FC = () => {
                     }}
                   />
                   <button type="submit" className="btn btn-primary btn-sm">
-                    <i className="fa-solid fa-paper-plane"></i> {t('btn_submit')}
+                    <i className={editingId ? 'fa-solid fa-check' : 'fa-solid fa-paper-plane'}></i>{' '}
+                    {editingId ? t('modal_update_review') : t('btn_submit')}
                   </button>
                 </div>
               </form>

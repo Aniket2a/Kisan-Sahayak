@@ -3,7 +3,7 @@ import { useApp } from '../context/AppContext';
 import { ResourceCard } from '../components/ResourceCard';
 
 export const BookmarksPage: React.FC = () => {
-  const { currentUser, resources, bookmarkedIds, navigate, t, tc } = useApp();
+  const { currentUser, resources, bookmarkedIds, isBookmarksLoading, bookmarksError, refreshBookmarks, navigate, t, tc } = useApp();
   const [activeType, setActiveType] = useState<string>('All');
 
   if (!currentUser) {
@@ -48,13 +48,30 @@ export const BookmarksPage: React.FC = () => {
     <div className="container" style={{ paddingTop: '3rem', paddingBottom: '5rem' }}>
       {/* PAGE HEADER */}
       <div className="section-header" style={{ textAlign: 'left', marginBottom: '2.5rem' }}>
-        <span className="section-badge" style={{ backgroundColor: 'var(--amber-light)', color: 'var(--amber-warm)', borderColor: '#fde68a' }}>
-          <i className="fa-solid fa-bookmark"></i> {t('bookmarks_badge')}
-        </span>
-        <h1 className="section-title">{t('bookmarks_title')} ({bookmarkedIds.length})</h1>
-        <p className="section-subtitle" style={{ margin: 0 }}>
-          {t('bookmarks_sub')}
-        </p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
+          <div>
+            <span className="section-badge" style={{ backgroundColor: 'var(--amber-light)', color: 'var(--amber-warm)', borderColor: '#fde68a' }}>
+              <i className="fa-solid fa-bookmark"></i> {t('bookmarks_badge')}
+            </span>
+            <h1 className="section-title">
+              {t('bookmarks_title')} {isBookmarksLoading ? '' : `(${bookmarkedIds.length})`}
+            </h1>
+            <p className="section-subtitle" style={{ margin: 0 }}>
+              {t('bookmarks_sub')}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => refreshBookmarks()}
+            disabled={isBookmarksLoading}
+            className="btn btn-secondary btn-sm"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', alignSelf: 'center' }}
+            title="Refresh cloud bookmarks"
+          >
+            <i className={`fa-solid fa-arrows-rotate ${isBookmarksLoading ? 'fa-spin' : ''}`}></i>
+            <span>{isBookmarksLoading ? t('loading') : t('filter_reset')}</span>
+          </button>
+        </div>
       </div>
 
       {/* FILTER PILLS */}
@@ -74,7 +91,14 @@ export const BookmarksPage: React.FC = () => {
       </div>
 
       {/* SAVED ITEMS GRID */}
-      {savedResources.length > 0 ? (
+      {isBookmarksLoading ? (
+        <div style={{ textAlign: 'center', padding: '4rem 2rem', background: '#fff', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-light)' }}>
+          <i className="fa-solid fa-spinner fa-spin" style={{ fontSize: '2.5rem', color: 'var(--primary-green)', marginBottom: '1rem' }}></i>
+          <p style={{ color: 'var(--text-muted)', margin: 0, fontWeight: 500 }}>
+            {t('loading_bookmarks')}
+          </p>
+        </div>
+      ) : savedResources.length > 0 ? (
         <div className="resource-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))' }}>
           {savedResources.map(res => (
             <ResourceCard key={res.id} resource={res} />

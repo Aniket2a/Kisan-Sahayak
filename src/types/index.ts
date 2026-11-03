@@ -40,9 +40,16 @@ export interface Resource {
   created_at?: string;
 }
 
+export interface Bookmark {
+  id?: string;
+  userId: string | number;
+  resourceId: number;
+  createdAt?: string;
+}
+
 export interface Feedback {
   id: number;
-  user_id: string | number;
+  user_id?: string | number;
   user_name: string;
   username?: string;
   resource_id: number;
@@ -50,6 +57,14 @@ export interface Feedback {
   rating: number;
   comment: string;
   created_at: string;
+  updated_at?: string;
+  is_author?: boolean;
+}
+
+export interface ResourceRating {
+  resource_id: number;
+  avg_rating: number;
+  review_count: number;
 }
 
 export interface Comment {
