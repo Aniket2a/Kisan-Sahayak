@@ -158,7 +158,7 @@ async function startServer() {
   };
 
   const adminLoginAttempts = new Map<string, { count: number; resetAt: number }>();
-  const loginAttemptKey = (req: Request, username: string) => String(req.ip || req.socket.remoteAddress || 'unknown') + ':' + username.toLowerCase();
+  const loginAttemptKey = (req: Request, _username: string) => String(req.ip || req.socket.remoteAddress || 'unknown');
 
   // --- API ROUTES ---
 
@@ -338,12 +338,15 @@ async function startServer() {
       authUsers.push(...batch);
       if (batch.length < 1000) break;
     }
-    const ids = authUsers.map(user => user.id);
-    const { data: profiles, error: profileError } = ids.length
-      ? await client.from('profiles').select('id, username, full_name, state, preferred_category, role, created_at').in('id', ids)
-      : { data: [], error: null };
-    if (profileError) return res.status(502).json({ error: profileError.message });
-    const profileById = new Map((profiles || []).map(profile => [profile.id, profile]));
+    const profileRows: any[] = [];
+    for (let offset = 0; offset < authUsers.length; offset += 100) {
+      const ids = authUsers.slice(offset, offset + 100).map(user => user.id);
+      const { data: profiles, error: profileError } = await client.from('profiles')
+        .select('id, username, full_name, state, preferred_category, role, created_at').in('id', ids);
+      if (profileError) return res.status(502).json({ error: profileError.message });
+      profileRows.push(...(profiles || []));
+    }
+    const profileById = new Map(profileRows.map(profile => [profile.id, profile]));
     const users = authUsers.map(user => {
       const profile = profileById.get(user.id);
       return {
