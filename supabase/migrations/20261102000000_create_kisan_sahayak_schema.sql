@@ -794,8 +794,22 @@ BEGIN
           RAISE EXCEPTION 'Unauthorized: admin_set_user_role requires trusted server-side administrative credentials.';
         END IF;
 
-        IF p_new_role NOT IN ('user', 'admin') THEN
+        IF p_new_role IS NULL OR p_new_role NOT IN ('user', 'admin') THEN
           RAISE EXCEPTION 'Invalid role specified: %', p_new_role;
+        END IF;
+
+        -- Serialize role changes so concurrent requests cannot remove the final administrator.
+        PERFORM pg_advisory_xact_lock(741852963);
+
+        IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = p_target_user_id) THEN
+          RAISE EXCEPTION 'Target user profile does not exist.';
+        END IF;
+
+        IF p_new_role = 'user'
+           AND EXISTS (SELECT 1 FROM public.profiles WHERE id = p_target_user_id AND role = 'admin') THEN
+          IF (SELECT count(*) FROM public.profiles WHERE role = 'admin') <= 1 THEN
+            RAISE EXCEPTION 'The last administrator cannot be demoted.';
+          END IF;
         END IF;
 
         PERFORM set_config('kisan.admin_role_change', 'allowed', true);
