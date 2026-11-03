@@ -5,6 +5,7 @@ import path from 'path';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 function cleanEnvValue(val?: string): string {
   if (!val) return '';
@@ -46,7 +47,7 @@ function getEnvConfig(): { username: string; email: string; hash: string; secret
     envFile.ADMIN_PASSWORD ||
     ''
   );
-  const secret = cleanEnvValue(process.env.JWT_SECRET || envFile.JWT_SECRET || 'kisan_sahayak_secure_default_secret_2026');
+  const secret = cleanEnvValue(process.env.JWT_SECRET || envFile.JWT_SECRET || '');
   return { username, email, hash, secret };
 }
 
@@ -54,29 +55,12 @@ function verifyAdminPassword(submittedPassword: string, storedHashOrPassword: st
   if (!submittedPassword || !storedHashOrPassword) return false;
   const target = cleanEnvValue(storedHashOrPassword);
 
-  // 1. If stored value is a bcrypt hash (starts with $2 and is 59-60 characters)
-  if (target.startsWith('$2') && (target.length === 59 || target.length === 60)) {
-    try {
-      if (bcrypt.compareSync(submittedPassword, target)) {
-        return true;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  // 2. If stored value is plaintext (e.g. configured directly in environment variables)
+  if (!/^\$2[aby]\$/.test(target) || target.length < 59 || target.length > 60) return false;
   try {
-    const a = Buffer.from(submittedPassword, 'utf-8');
-    const b = Buffer.from(target, 'utf-8');
-    if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
-      return true;
-    }
+    return bcrypt.compareSync(submittedPassword, target);
   } catch {
-    // ignore
+    return false;
   }
-
-  return submittedPassword === target;
 }
 
 async function startServer() {
@@ -96,7 +80,7 @@ async function startServer() {
     HOST = process.argv[hostIdx + 1];
   }
 
-  app.use(express.json());
+  app.use(express.json({ limit: '1mb' }));
 
   // Middleware to authenticate Admin token
   const authenticateAdminToken = (req: Request, res: Response, next: NextFunction) => {
@@ -125,7 +109,7 @@ async function startServer() {
   // 1. Check if admin credentials are configured in backend environment
   app.get('/api/admin/status', (req: Request, res: Response) => {
     const { username, hash } = getEnvConfig();
-    const isConfigured = Boolean(username && hash);
+    const isConfigured = Boolean(username && hash && /^\$2[aby]\$/.test(hash) && getEnvConfig().secret.length >= 32);
     res.json({ configured: isConfigured });
   });
 
@@ -178,7 +162,7 @@ async function startServer() {
     const { username, password } = req.body || {};
     const { username: configUsername, email: configEmail, hash: configHash, secret } = getEnvConfig();
 
-    if (!configUsername || !configHash) {
+    if (!configUsername || !configHash || !/^\$2[aby]\$/.test(configHash) || configHash.length < 59 || configHash.length > 60 || secret.length < 32) {
       return res.status(503).json({
         success: false,
         error: 'Admin credentials have not been configured on this server. Please set ADMIN_USERNAME and ADMIN_PASSWORD_HASH.'
