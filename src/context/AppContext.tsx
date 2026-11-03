@@ -247,7 +247,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       email: authUser.email || '',
       state: state,
       preferred_category: preferredCategory,
-      role: 'user', // Enforce non-admin for farmer auth
+      role: profileData?.role === 'admin' ? 'admin' : 'user',
       created_at: profileData?.created_at || authUser.created_at || new Date().toISOString()
     };
   };
@@ -259,6 +259,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || payload.message || ('Admin request failed (' + response.status + ').'));
     return payload;
+  };
+  const exchangeSupabaseAdminSession = async (accessToken: string): Promise<User | null> => {
+    const response = await fetch('/api/auth/supabase-admin-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accessToken })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.success || !payload.token || !payload.user) return null;
+    sessionStorage.setItem('kisan_admin_token', payload.token);
+    return { ...payload.user, id: String(payload.user.id), role: 'admin' as UserRole };
   };
   const fetchAdminUsers = async () => {
     const payload = await adminRequest('/api/admin/users');
@@ -305,9 +316,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const { data: { session }, error } = await supabase.auth.getSession();
           if (!error && session?.user && isMounted) {
             const farmer = await mapSupabaseUserToUser(session.user);
-            if (isMounted) {
-              setCurrentUser(farmer);
-            }
+            const promotedAdmin = farmer.role === 'admin' ? await exchangeSupabaseAdminSession(session.access_token) : null;
+            if (isMounted) setCurrentUser(promotedAdmin || { ...farmer, role: 'user' });
           }
         } catch (err) {
           console.warn('Error fetching Supabase session:', err);
@@ -328,7 +338,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!isMounted) return;
         if (event === 'SIGNED_IN' && session?.user) {
           const farmer = await mapSupabaseUserToUser(session.user);
-          if (isMounted) setCurrentUser(farmer);
+          const promotedAdmin = farmer.role === 'admin' ? await exchangeSupabaseAdminSession(session.access_token) : null;
+          if (isMounted) setCurrentUser(promotedAdmin || { ...farmer, role: 'user' });
         } else if (event === 'SIGNED_OUT') {
           if (isMounted) {
             // Only clear if current user wasn't admin
@@ -336,7 +347,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         } else if (event === 'TOKEN_REFRESHED' && session?.user) {
           const farmer = await mapSupabaseUserToUser(session.user);
-          if (isMounted) setCurrentUser(farmer);
+          const promotedAdmin = farmer.role === 'admin' ? await exchangeSupabaseAdminSession(session.access_token) : null;
+          if (isMounted) setCurrentUser(promotedAdmin || { ...farmer, role: 'user' });
         }
       });
       authSubscription = subscription;
@@ -1174,10 +1186,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Farmers are strictly non-admin
       sessionStorage.removeItem('kisan_admin_token');
-      const farmerUser = await mapSupabaseUserToUser(data.user);
-      setCurrentUser(farmerUser);
-      showToast(`${t('auth_welcome_back')}, ${farmerUser.full_name}!`, 'success');
-      return { success: true, message: t('auth_login_success'), role: 'user' };
+      const mappedUser = await mapSupabaseUserToUser(data.user);
+      const promotedAdmin = mappedUser.role === 'admin' && data.session?.access_token
+        ? await exchangeSupabaseAdminSession(data.session.access_token)
+        : null;
+      const signedInUser = promotedAdmin || { ...mappedUser, role: 'user' as UserRole };
+      setCurrentUser(signedInUser);
+      if (promotedAdmin) {
+        try { await fetchAdminUsers(); } catch (error: any) { showToast(error.message || 'Could not load users.', 'danger'); }
+      }
+      showToast(`${t('auth_welcome_back')}, ${signedInUser.full_name}!`, 'success');
+      return { success: true, message: t('auth_login_success'), role: signedInUser.role };
     } catch (err: any) {
       return {
         success: false,
