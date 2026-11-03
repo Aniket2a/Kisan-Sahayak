@@ -789,7 +789,11 @@ BEGIN
       SET search_path = public, pg_temp
       AS $body$
       BEGIN
-        IF COALESCE(current_setting('request.jwt.claim.role', true), '') <> 'service_role' 
+        IF COALESCE(
+             current_setting('request.jwt.claim.role', true),
+             (NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role'),
+             ''
+           ) <> 'service_role'
            AND session_user NOT IN ('postgres', 'supabase_admin') THEN
           RAISE EXCEPTION 'Unauthorized: admin_set_user_role requires trusted server-side administrative credentials.';
         END IF;
