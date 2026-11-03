@@ -1,10 +1,11 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 function cleanEnvValue(val?: string): string {
   if (!val) return '';
@@ -46,7 +47,7 @@ function getEnvConfig(): { username: string; email: string; hash: string; secret
     envFile.ADMIN_PASSWORD ||
     ''
   );
-  const secret = cleanEnvValue(process.env.JWT_SECRET || envFile.JWT_SECRET || 'kisan_sahayak_secure_default_secret_2026');
+  const secret = cleanEnvValue(process.env.JWT_SECRET || envFile.JWT_SECRET || '');
   return { username, email, hash, secret };
 }
 
@@ -54,29 +55,12 @@ function verifyAdminPassword(submittedPassword: string, storedHashOrPassword: st
   if (!submittedPassword || !storedHashOrPassword) return false;
   const target = cleanEnvValue(storedHashOrPassword);
 
-  // 1. If stored value is a bcrypt hash (starts with $2 and is 59-60 characters)
-  if (target.startsWith('$2') && (target.length === 59 || target.length === 60)) {
-    try {
-      if (bcrypt.compareSync(submittedPassword, target)) {
-        return true;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  // 2. If stored value is plaintext (e.g. configured directly in environment variables)
+  if (!/^\$2[aby]\$/.test(target) || target.length < 59 || target.length > 60) return false;
   try {
-    const a = Buffer.from(submittedPassword, 'utf-8');
-    const b = Buffer.from(target, 'utf-8');
-    if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
-      return true;
-    }
+    return bcrypt.compareSync(submittedPassword, target);
   } catch {
-    // ignore
+    return false;
   }
-
-  return submittedPassword === target;
 }
 
 async function startServer() {
@@ -96,41 +80,123 @@ async function startServer() {
     HOST = process.argv[hostIdx + 1];
   }
 
-  app.use(express.json());
+  app.use(express.json({ limit: '1mb' }));
 
   // Middleware to authenticate Admin token
-  const authenticateAdminToken = (req: Request, res: Response, next: NextFunction) => {
+  const authenticateAdminToken = async (req: Request, res: Response, next: NextFunction) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ valid: false, error: 'Authentication token required' });
     }
-
     const token = authHeader.split(' ')[1];
     const { secret, username } = getEnvConfig();
-
+    if (!secret || secret.length < 32) return res.status(503).json({ valid: false, error: 'Admin session signing is not configured securely.' });
     try {
-      const decoded = jwt.verify(token, secret) as { role: string; username: string };
-      if (decoded && decoded.role === 'admin' && decoded.username.toLowerCase() === username.toLowerCase()) {
+      const decoded = jwt.verify(token, secret) as { role: string; username: string; authUserId?: string };
+      if (!decoded || decoded.role !== 'admin') return res.status(403).json({ valid: false, error: 'Admin role verification failed' });
+      const isRootAdmin = Boolean(username && decoded.username && decoded.username.toLowerCase() === username.toLowerCase() && !decoded.authUserId);
+      if (isRootAdmin) {
         (req as any).adminUser = decoded;
         return next();
       }
-      return res.status(403).json({ valid: false, error: 'Admin role verification failed' });
+      if (decoded.authUserId) {
+        const client = getAdminSupabase();
+        const { data: profile, error } = await client.from('profiles').select('id, role').eq('id', decoded.authUserId).maybeSingle();
+        if (!error && profile?.role === 'admin') {
+          (req as any).adminUser = decoded;
+          return next();
+        }
+      }
+      return res.status(403).json({ valid: false, error: 'Admin role verification failed or has been revoked.' });
     } catch (err) {
       return res.status(401).json({ valid: false, error: 'Invalid or expired session token' });
     }
   };
 
+
+  // Server-only Supabase client. The service-role key is never exposed to the browser.
+  let adminSupabase: SupabaseClient | null = null;
+  const getAdminSupabase = (): SupabaseClient => {
+    if (adminSupabase) return adminSupabase;
+    const envFile = parseEnvFile(path.resolve(process.cwd(), '.env'));
+    const url = cleanEnvValue(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || envFile.SUPABASE_URL || envFile.VITE_SUPABASE_URL);
+    const serviceKey = cleanEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY || envFile.SUPABASE_SERVICE_ROLE_KEY);
+    if (!url || !serviceKey) throw new Error('Server Supabase configuration is missing. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
+    adminSupabase = createClient(url, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } });
+    return adminSupabase;
+  };
+
+  const asyncAdmin = (handler: (req: Request, res: Response) => Promise<any>) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      Promise.resolve(handler(req, res)).catch(next);
+    };
+
+  const allowedResourceFields = ['title', 'description', 'category_id', 'resource_type', 'external_url', 'image_url', 'season_climate', 'eligibility', 'benefits', 'provider'];
+  const cleanResourcePayload = (body: any, partial = false) => {
+    const payload: Record<string, any> = {};
+    for (const key of allowedResourceFields) {
+      if (body && Object.prototype.hasOwnProperty.call(body, key)) payload[key] = body[key];
+    }
+    if (!partial) {
+      if (typeof payload.title !== 'string' || !payload.title.trim()) throw new Error('A resource title is required.');
+      if (typeof payload.description !== 'string' || !payload.description.trim()) throw new Error('A resource description is required.');
+      if (!Number.isInteger(Number(payload.category_id))) throw new Error('A valid category is required.');
+      if (typeof payload.resource_type !== 'string' || !payload.resource_type.trim()) throw new Error('A resource type is required.');
+    }
+    if (payload.title !== undefined) {
+      if (typeof payload.title !== 'string' || !payload.title.trim()) throw new Error('Resource title cannot be empty.');
+      payload.title = payload.title.trim();
+    }
+    if (payload.description !== undefined) {
+      if (typeof payload.description !== 'string' || !payload.description.trim()) throw new Error('Resource description cannot be empty.');
+      payload.description = payload.description.trim();
+    }
+    const allowedResourceTypes = ['crop', 'tool', 'scheme', 'loan', 'guide', 'marketplace', 'community'];
+    if (payload.resource_type !== undefined && !allowedResourceTypes.includes(payload.resource_type)) throw new Error('Invalid resource type.');
+    if (payload.category_id !== undefined) {
+      const categoryId = Number(payload.category_id);
+      if (!Number.isInteger(categoryId) || categoryId <= 0) throw new Error('A valid category is required.');
+      payload.category_id = categoryId;
+    }
+    for (const key of ['external_url', 'image_url', 'season_climate', 'eligibility', 'benefits', 'provider']) {
+      if (payload[key] === '') payload[key] = null;
+    }
+    if (partial && Object.keys(payload).length === 0) throw new Error('No editable resource fields were supplied.');
+    return payload;
+  };
+
+  const recordAdminAudit = async (client: SupabaseClient, req: Request, action: string, targetType: string, targetId: string | number, details: Record<string, any> = {}) => {
+    const admin = (req as any).adminUser || {};
+    const { error } = await client.from('audit_logs').insert({
+      action,
+      performed_by: admin.authUserId || null,
+      target_type: targetType,
+      target_id: String(targetId),
+      details,
+      ip_address: req.ip || null
+    });
+    if (error) console.warn('[Admin audit] Could not record action:', action, error.message);
+  };
+
+  const adminLoginAttempts = new Map<string, { count: number; resetAt: number }>();
+  const loginAttemptKey = (req: Request, _username: string) => String(req.ip || req.socket.remoteAddress || 'unknown');
+
   // --- API ROUTES ---
+
+  app.get('/api/health', (_req: Request, res: Response) => {
+    res.json({ ok: true, service: 'kisan-sahayak-api' });
+  });
 
   // 1. Check if admin credentials are configured in backend environment
   app.get('/api/admin/status', (req: Request, res: Response) => {
     const { username, hash } = getEnvConfig();
-    const isConfigured = Boolean(username && hash);
+    const isConfigured = Boolean(username && hash && /^\$2[aby]\$/.test(hash) && getEnvConfig().secret.length >= 32);
     res.json({ configured: isConfigured });
   });
 
   // 2. Secure one-time Admin Setup (only works if unconfigured)
   app.post('/api/admin/setup', (req: Request, res: Response) => {
+    if (process.env.NODE_ENV === 'production') return res.status(403).json({ success: false, error: 'Runtime admin setup is disabled in production. Use the trusted setup script and deployment environment variables.' });
     const { username: existingUser, hash: existingHash } = getEnvConfig();
     if (existingUser && existingHash) {
       return res.status(403).json({
@@ -177,8 +243,14 @@ async function startServer() {
   app.post('/api/auth/admin-login', async (req: Request, res: Response) => {
     const { username, password } = req.body || {};
     const { username: configUsername, email: configEmail, hash: configHash, secret } = getEnvConfig();
+    const attemptKey = loginAttemptKey(req, typeof username === 'string' ? username : '');
+    const attempt = adminLoginAttempts.get(attemptKey);
+    if (attempt && attempt.resetAt > Date.now() && attempt.count >= 8) {
+      return res.status(429).json({ success: false, message: 'Too many login attempts. Please wait 15 minutes and try again.', isAdminAttempt: true });
+    }
+    if (attempt && attempt.resetAt <= Date.now()) adminLoginAttempts.delete(attemptKey);
 
-    if (!configUsername || !configHash) {
+    if (!configUsername || !configHash || !/^\$2[aby]\$/.test(configHash) || configHash.length < 59 || configHash.length > 60 || secret.length < 32) {
       return res.status(503).json({
         success: false,
         error: 'Admin credentials have not been configured on this server. Please set ADMIN_USERNAME and ADMIN_PASSWORD_HASH.'
@@ -197,6 +269,8 @@ async function startServer() {
     const isNameMatch = submittedName === expectedName || (expectedEmail && submittedName === expectedEmail);
 
     if (!isNameMatch) {
+      const current = adminLoginAttempts.get(attemptKey);
+      adminLoginAttempts.set(attemptKey, { count: (current?.count || 0) + 1, resetAt: current?.resetAt && current.resetAt > Date.now() ? current.resetAt : Date.now() + 15 * 60 * 1000 });
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
@@ -215,6 +289,8 @@ async function startServer() {
 
     const isMatch = verifyAdminPassword(password, configHash);
     if (!isMatch) {
+      const current = adminLoginAttempts.get(attemptKey);
+      adminLoginAttempts.set(attemptKey, { count: (current?.count || 0) + 1, resetAt: current?.resetAt && current.resetAt > Date.now() ? current.resetAt : Date.now() + 15 * 60 * 1000 });
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
@@ -223,6 +299,7 @@ async function startServer() {
     }
 
     // Issue signed 8-hour Admin token
+    adminLoginAttempts.delete(attemptKey);
     const token = jwt.sign(
       {
         id: 'admin_root',
@@ -247,15 +324,169 @@ async function startServer() {
     });
   });
 
+  // Exchange a valid Supabase session for an admin API token only when the database profile is admin.
+  app.post('/api/auth/supabase-admin-session', asyncAdmin(async (req, res) => {
+    const accessToken = req.body?.accessToken;
+    if (typeof accessToken !== 'string' || !accessToken) return res.status(401).json({ error: 'Supabase access token is required.' });
+    const client = getAdminSupabase();
+    const { data: authData, error: authError } = await client.auth.getUser(accessToken);
+    if (authError || !authData.user) return res.status(401).json({ error: 'Invalid Supabase session.' });
+    const { data: profile, error: profileError } = await client.from('profiles').select('id, username, full_name, state, preferred_category, role, created_at').eq('id', authData.user.id).maybeSingle();
+    if (profileError) return res.status(502).json({ error: profileError.message });
+    if (!profile || profile.role !== 'admin') return res.status(403).json({ error: 'This account is not an administrator.' });
+    const config = getEnvConfig();
+    if (!config.secret || config.secret.length < 32) return res.status(503).json({ error: 'Admin session signing is not configured securely.' });
+    const token = jwt.sign({ id: profile.id, username: profile.username, role: 'admin', authUserId: profile.id }, config.secret, { expiresIn: '8h' });
+    return res.json({ success: true, token, user: { id: profile.id, full_name: profile.full_name, username: profile.username, email: authData.user.email || '', role: 'admin', state: profile.state, preferred_category: profile.preferred_category, created_at: profile.created_at } });
+  }));
+
   // 4. Verify Admin Session / Token
   app.get('/api/auth/verify-session', authenticateAdminToken, (req: Request, res: Response) => {
     const user = (req as any).adminUser;
     res.json({
       valid: true,
       role: 'admin',
+      id: user.authUserId || 'admin_root',
       username: user.username
     });
   });
+
+
+  // Admin user directory backed by Supabase Auth and profiles.
+  app.get('/api/admin/users', authenticateAdminToken, asyncAdmin(async (_req, res) => {
+    const client = getAdminSupabase();
+    const authUsers: any[] = [];
+    for (let page = 1; page <= 100; page += 1) {
+      const { data: authData, error: authError } = await client.auth.admin.listUsers({ page, perPage: 1000 });
+      if (authError) return res.status(502).json({ error: authError.message });
+      const batch = authData.users || [];
+      authUsers.push(...batch);
+      if (batch.length < 1000) break;
+    }
+    const profileRows: any[] = [];
+    for (let offset = 0; offset < authUsers.length; offset += 100) {
+      const ids = authUsers.slice(offset, offset + 100).map(user => user.id);
+      const { data: profiles, error: profileError } = await client.from('profiles')
+        .select('id, username, full_name, state, preferred_category, role, created_at').in('id', ids);
+      if (profileError) return res.status(502).json({ error: profileError.message });
+      profileRows.push(...(profiles || []));
+    }
+    const profileById = new Map(profileRows.map(profile => [profile.id, profile]));
+    const users = authUsers.map(user => {
+      const profile = profileById.get(user.id);
+      return {
+        id: user.id,
+        full_name: profile?.full_name || user.user_metadata?.full_name || 'Farmer',
+        username: profile?.username || user.user_metadata?.username || user.email?.split('@')[0] || 'farmer',
+        email: user.email || '',
+        state: profile?.state || user.user_metadata?.state || '',
+        preferred_category: profile?.preferred_category || user.user_metadata?.preferred_category || '',
+        role: profile?.role === 'admin' ? 'admin' : 'user',
+        created_at: profile?.created_at || user.created_at
+      };
+    });
+    return res.json({ users, total: users.length });
+  }));
+
+  app.patch('/api/admin/users/:id/role', authenticateAdminToken, asyncAdmin(async (req, res) => {
+    const targetId = String(req.params.id || '');
+    const role = req.body?.role;
+    if ((req as any).adminUser?.authUserId === targetId) return res.status(403).json({ error: 'You cannot change your own administrator role.' });
+    if (!/^[0-9a-f-]{36}$/i.test(targetId) || !['admin', 'user'].includes(role)) {
+      return res.status(400).json({ error: 'A valid user ID and role are required.' });
+    }
+    const client = getAdminSupabase();
+    const { data: target, error: lookupError } = await client.from('profiles').select('id, role').eq('id', targetId).maybeSingle();
+    if (lookupError) return res.status(502).json({ error: lookupError.message });
+    if (!target) return res.status(404).json({ error: 'User profile was not found.' });
+    if (target.role === role) return res.json({ success: true, id: targetId, role });
+    if (target.role === 'admin' && role === 'user') {
+      const { count, error: countError } = await client.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'admin');
+      if (countError) return res.status(502).json({ error: countError.message });
+      if ((count || 0) <= 1) return res.status(409).json({ error: 'The last administrator cannot be demoted.' });
+    }
+    const { error } = await client.rpc('admin_set_user_role', { p_target_user_id: targetId, p_new_role: role });
+    if (error) return res.status(502).json({ error: error.message });
+    return res.json({ success: true, id: targetId, role });
+  }));
+
+  app.delete('/api/admin/users/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
+    const targetId = String(req.params.id || '');
+    if (!/^[0-9a-f-]{36}$/i.test(targetId)) return res.status(400).json({ error: 'A valid user ID is required.' });
+    if ((req as any).adminUser?.authUserId === targetId) return res.status(403).json({ error: 'You cannot delete your own administrator account.' });
+    const client = getAdminSupabase();
+    const { data: authTarget, error: authLookupError } = await client.auth.admin.getUserById(targetId);
+    if (authLookupError || !authTarget.user) return res.status(404).json({ error: 'User account was not found.' });
+    const { data: target, error: lookupError } = await client.from('profiles').select('id, role').eq('id', targetId).maybeSingle();
+    if (lookupError) return res.status(502).json({ error: lookupError.message });
+    if (target?.role === 'admin') {
+      const { count, error: countError } = await client.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'admin');
+      if (countError) return res.status(502).json({ error: countError.message });
+      if ((count || 0) <= 1) return res.status(409).json({ error: 'The last administrator cannot be deleted.' });
+    }
+    const { error } = await client.auth.admin.deleteUser(targetId);
+    if (error) return res.status(502).json({ error: error.message });
+    await recordAdminAudit(client, req, 'USER_DELETED', 'auth_user', targetId);
+    return res.json({ success: true, id: targetId });
+  }));
+
+  app.delete('/api/admin/community/posts/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'A valid post ID is required.' });
+    const client = getAdminSupabase();
+    const { data, error } = await client.from('community_posts').delete().eq('id', id).select('id').maybeSingle();
+    if (error) return res.status(502).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Community post was not found.' });
+    await recordAdminAudit(client, req, 'COMMUNITY_POST_DELETED', 'community_post', id);
+    return res.json({ success: true, id });
+  }));
+
+  app.delete('/api/admin/feedback/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'A valid feedback ID is required.' });
+    const client = getAdminSupabase();
+    const { data, error } = await client.from('feedback').delete().eq('id', id).select('id').maybeSingle();
+    if (error) return res.status(502).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Feedback was not found.' });
+    await recordAdminAudit(client, req, 'FEEDBACK_DELETED', 'feedback', id);
+    return res.json({ success: true, id });
+  }));
+
+  app.post('/api/admin/resources', authenticateAdminToken, asyncAdmin(async (req, res) => {
+    let payload: Record<string, any>;
+    try { payload = cleanResourcePayload(req.body); }
+    catch (error: any) { return res.status(400).json({ error: error.message }); }
+    const client = getAdminSupabase();
+    const { data, error } = await client.from('resources').insert(payload).select('*').single();
+    if (error) return res.status(502).json({ error: error.message });
+    await recordAdminAudit(client, req, 'RESOURCE_CREATED', 'resource', data.id, { title: data.title });
+    return res.status(201).json({ resource: data });
+  }));
+
+  app.patch('/api/admin/resources/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'A valid resource ID is required.' });
+    let payload: Record<string, any>;
+    try { payload = cleanResourcePayload(req.body, true); }
+    catch (error: any) { return res.status(400).json({ error: error.message }); }
+    const client = getAdminSupabase();
+    const { data, error } = await client.from('resources').update(payload).eq('id', id).select('*').maybeSingle();
+    if (error) return res.status(502).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Resource was not found.' });
+    await recordAdminAudit(client, req, 'RESOURCE_UPDATED', 'resource', id, { fields: Object.keys(payload) });
+    return res.json({ resource: data });
+  }));
+
+  app.delete('/api/admin/resources/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'A valid resource ID is required.' });
+    const client = getAdminSupabase();
+    const { data, error } = await client.from('resources').delete().eq('id', id).select('id').maybeSingle();
+    if (error) return res.status(502).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Resource was not found.' });
+    await recordAdminAudit(client, req, 'RESOURCE_DELETED', 'resource', id);
+    return res.json({ success: true, id });
+  }));
 
   // 5. Protected Admin Test / Ping
   app.get('/api/admin/verify', authenticateAdminToken, (req: Request, res: Response) => {
