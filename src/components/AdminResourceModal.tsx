@@ -67,15 +67,16 @@ export const AdminResourceModal: React.FC = () => {
 
   if (!isAdminModalOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !description.trim()) return;
 
     const matchedCategory = categories.find(c => c.name.toLowerCase() === categoryName.toLowerCase());
     const targetCategoryId = matchedCategory ? matchedCategory.id : (adminModalResource?.category_id || 1);
+    let saved = false;
 
     if (adminModalResource) {
-      editResource(adminModalResource.id, {
+      saved = await editResource(adminModalResource.id, {
         title: title.trim(),
         resource_type: resourceType,
         category_name: categoryName,
@@ -89,7 +90,7 @@ export const AdminResourceModal: React.FC = () => {
         benefits: benefits.trim()
       });
     } else {
-      addResource({
+      saved = await addResource({
         title: title.trim(),
         resource_type: resourceType,
         category_name: categoryName,
@@ -103,7 +104,8 @@ export const AdminResourceModal: React.FC = () => {
         benefits: benefits.trim()
       });
     }
-    closeAdminModal();
+
+    if (saved) closeAdminModal();
   };
 
   const handleBackdropMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
