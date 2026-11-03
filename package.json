@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
-    "start": "node --experimental-strip-types server.ts",
+    "dev": "tsx dev-server.ts",
+    "start": "node --experimental-strip-types dev-server.ts",
     "build": "tsc && vite build",
     "lint": "tsc --noEmit",
     "preview": "vite preview --port 3000",
@@ -18,7 +18,9 @@
     "express": "^5.3.0",
     "jsonwebtoken": "^9.0.3",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "serverless-http": "^3.2.0",
+    "@netlify/aws-lambda-compat": "^2.0.3"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

@@ -1132,6 +1132,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (errData.isAdminAttempt) {
           return { success: false, message: t('auth_invalid_creds') };
         }
+      } else if (resp.status >= 400) {
+        // Do not misreport backend/admin API failures as farmer email errors.
+        const errData = await resp.json().catch(() => ({}));
+        return {
+          success: false,
+          message: errData.message || errData.error || `Admin login service failed (${resp.status}). Please try again.`
+        };
       }
     } catch {
       // Backend request error - proceed to farmer auth

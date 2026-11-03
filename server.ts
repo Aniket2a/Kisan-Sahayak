@@ -1,5 +1,4 @@
 import express, { type Request, type Response, type NextFunction } from 'express';
-import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -63,23 +62,8 @@ function verifyAdminPassword(submittedPassword: string, storedHashOrPassword: st
   }
 }
 
-async function startServer() {
+export function createApp() {
   const app = express();
-  
-  let PORT = 3000;
-  const portIdx = process.argv.indexOf('--port');
-  if (portIdx !== -1 && process.argv[portIdx + 1]) {
-    PORT = parseInt(process.argv[portIdx + 1], 10) || 3000;
-  } else if (process.env.NODE_ENV === 'production' && process.env.PORT) {
-    PORT = parseInt(process.env.PORT, 10) || 3000;
-  }
-
-  let HOST = '0.0.0.0';
-  const hostIdx = process.argv.indexOf('--host');
-  if (hostIdx !== -1 && process.argv[hostIdx + 1] && !process.argv[hostIdx + 1].startsWith('-')) {
-    HOST = process.argv[hostIdx + 1];
-  }
-
   app.use(express.json({ limit: '1mb' }));
 
   // Middleware to authenticate Admin token
@@ -498,30 +482,5 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // --- FRONTEND INTEGRATION ---
-  if (process.env.NODE_ENV === 'production') {
-    app.use(express.static('dist'));
-    app.get('*', (req: Request, res: Response) => {
-      res.sendFile(path.resolve('dist/index.html'));
-    });
-  } else {
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        host: HOST,
-        hmr: false
-      },
-      appType: 'spa'
-    });
-    app.use(vite.middlewares);
-  }
-
-  app.listen(PORT, HOST, () => {
-    console.log(`[Kisan Sahayak] Full-stack application running at http://${HOST}:${PORT}`);
-  });
+  return app;
 }
-
-startServer().catch(err => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});

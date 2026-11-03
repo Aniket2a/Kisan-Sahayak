@@ -86,9 +86,9 @@ npm run build
 
 ## 🔐 Admin API & Production Configuration
 
-The administrator APIs run through the Express server in `server.ts`. A static-only frontend host does not execute this server by itself. In production, deploy the Express app to a Node host (or configure the frontend host to proxy every `/api/*` request to that backend). The frontend and API must be reachable on the same origin unless the API client is explicitly configured otherwise.
+The administrator APIs are defined in `server.ts` and exported as an Express app. Locally, `dev-server.ts` attaches Vite and starts the development server. On Netlify, `netlify/functions/api.ts` runs the same Express API through Netlify Functions, while Netlify serves the built frontend from `dist`.
 
-Configure these environment variables on the **server host**:
+Configure these environment variables in **Netlify site settings → Environment variables** (for the Functions runtime):
 
 | Variable | Purpose |
 |---|---|
@@ -99,7 +99,7 @@ Configure these environment variables on the **server host**:
 | `JWT_SECRET` | Random secret of at least 32 characters |
 | `PORT` | Port supplied by the hosting provider |
 
-The frontend still needs `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Never place the service-role key in frontend variables, source files, or Git.
+The frontend still needs `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Never place the service-role key in frontend variables, source files, or Git. Netlify routes `/api/*` to the Express Function using `netlify.toml`.
 
 For local setup, run `npm run setup-admin` in a trusted terminal. Copy the generated server configuration into the hosting provider's private environment-variable settings; do not commit `.env`.
 
