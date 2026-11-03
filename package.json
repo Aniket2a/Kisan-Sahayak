@@ -9,7 +9,8 @@
     "build": "tsc && vite build",
     "lint": "tsc --noEmit",
     "preview": "vite preview --port 3000",
-    "setup-admin": "tsx scripts/setup-admin.ts"
+    "setup-admin": "tsx scripts/setup-admin.ts",
+    "check:server": "tsc -p tsconfig.server.json --noEmit"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",
