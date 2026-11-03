@@ -91,7 +91,7 @@ interface AppContextType {
 
   // Community
   createPost: (title: string, category: string, content: string) => void;
-  deletePost: (postId: number) => void;
+  deletePost: (postId: number) => Promise<void>;
   toggleLike: (postId: number) => void;
   isPostLiked: (postId: number) => boolean;
   addComment: (postId: number, commentText: string) => void;
@@ -1056,6 +1056,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteFeedback = async (feedbackId: number): Promise<void> => {
+    if (currentUser?.role === 'admin') {
+      try {
+        await adminRequest('/api/admin/feedback/' + feedbackId, { method: 'DELETE' });
+        await Promise.all([fetchFeedback(), fetchRatings()]);
+        showToast(t('review_deleted'), 'success');
+      } catch (error: any) {
+        showToast(error.message || 'Could not delete feedback.', 'danger');
+      }
+      return;
+    }
     // Optimistic removal
     setFeedback(prev => prev.filter(f => f.id !== feedbackId));
     showToast(t('review_deleted'), 'info');
@@ -1449,11 +1459,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Your question has been posted to the farmer community!', 'success');
   };
 
-  const deletePost = (postId: number) => {
-    setCommunityPosts(prev => prev.filter(p => p.id !== postId));
-    setComments(prev => prev.filter(c => c.post_id !== postId));
-    setLikes(prev => prev.filter(l => l.postId !== postId));
-    showToast('Post deleted successfully.', 'info');
+  const deletePost = async (postId: number): Promise<void> => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      showToast('Administrator access is required to moderate community posts.', 'danger');
+      return;
+    }
+    try {
+      await adminRequest('/api/admin/community/posts/' + postId, { method: 'DELETE' });
+      setCommunityPosts(prev => prev.filter(p => p.id !== postId));
+      setComments(prev => prev.filter(comment => comment.post_id !== postId));
+      setLikes(prev => prev.filter(like => like.postId !== postId));
+      showToast('Post deleted successfully.', 'success');
+    } catch (error: any) {
+      showToast(error.message || 'Could not delete post.', 'danger');
+    }
   };
 
   const isPostLiked = (postId: number) => {
