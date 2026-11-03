@@ -1423,7 +1423,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const editResource = async (id: number, data: Partial<Resource>): Promise<boolean> => {
-    if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return; }
+    if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return false; }
     const payload: Record<string, any> = {};
     ['title','description','category_id','resource_type','external_url','image_url','season_climate','eligibility','benefits','provider'].forEach(key => { if ((data as any)[key] !== undefined) payload[key] = (data as any)[key]; });
     try { await adminRequest('/api/admin/resources/' + id, { method: 'PATCH', body: JSON.stringify(payload) }); await fetchResources(); showToast('Resource updated successfully.', 'success'); return true; }
@@ -1431,7 +1431,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteResource = async (id: number): Promise<boolean> => {
-    if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return; }
+    if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return false; }
     try { await adminRequest('/api/admin/resources/' + id, { method: 'DELETE' }); await fetchResources(); showToast('Resource deleted successfully.', 'success'); return true; }
     catch (error: any) { showToast(error.message || 'Resource deletion failed.', 'danger'); return false; }
   };
