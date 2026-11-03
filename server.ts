@@ -183,6 +183,10 @@ async function startServer() {
 
   // --- API ROUTES ---
 
+  app.get('/api/health', (_req: Request, res: Response) => {
+    res.json({ ok: true, service: 'kisan-sahayak-api' });
+  });
+
   // 1. Check if admin credentials are configured in backend environment
   app.get('/api/admin/status', (req: Request, res: Response) => {
     const { username, hash } = getEnvConfig();
