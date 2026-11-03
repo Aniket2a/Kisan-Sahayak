@@ -157,6 +157,9 @@ async function startServer() {
     return payload;
   };
 
+  const adminLoginAttempts = new Map<string, { count: number; resetAt: number }>();
+  const loginAttemptKey = (req: Request, username: string) => String(req.ip || req.socket.remoteAddress || 'unknown') + ':' + username.toLowerCase();
+
   // --- API ROUTES ---
 
   // 1. Check if admin credentials are configured in backend environment
@@ -214,6 +217,12 @@ async function startServer() {
   app.post('/api/auth/admin-login', async (req: Request, res: Response) => {
     const { username, password } = req.body || {};
     const { username: configUsername, email: configEmail, hash: configHash, secret } = getEnvConfig();
+    const attemptKey = loginAttemptKey(req, typeof username === 'string' ? username : '');
+    const attempt = adminLoginAttempts.get(attemptKey);
+    if (attempt && attempt.resetAt > Date.now() && attempt.count >= 8) {
+      return res.status(429).json({ success: false, message: 'Too many login attempts. Please wait 15 minutes and try again.', isAdminAttempt: true });
+    }
+    if (attempt && attempt.resetAt <= Date.now()) adminLoginAttempts.delete(attemptKey);
 
     if (!configUsername || !configHash || !/^\$2[aby]\$/.test(configHash) || configHash.length < 59 || configHash.length > 60 || secret.length < 32) {
       return res.status(503).json({
@@ -234,6 +243,8 @@ async function startServer() {
     const isNameMatch = submittedName === expectedName || (expectedEmail && submittedName === expectedEmail);
 
     if (!isNameMatch) {
+      const current = adminLoginAttempts.get(attemptKey);
+      adminLoginAttempts.set(attemptKey, { count: (current?.count || 0) + 1, resetAt: current?.resetAt && current.resetAt > Date.now() ? current.resetAt : Date.now() + 15 * 60 * 1000 });
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
@@ -252,6 +263,8 @@ async function startServer() {
 
     const isMatch = verifyAdminPassword(password, configHash);
     if (!isMatch) {
+      const current = adminLoginAttempts.get(attemptKey);
+      adminLoginAttempts.set(attemptKey, { count: (current?.count || 0) + 1, resetAt: current?.resetAt && current.resetAt > Date.now() ? current.resetAt : Date.now() + 15 * 60 * 1000 });
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
@@ -260,6 +273,7 @@ async function startServer() {
     }
 
     // Issue signed 8-hour Admin token
+    adminLoginAttempts.delete(attemptKey);
     const token = jwt.sign(
       {
         id: 'admin_root',
