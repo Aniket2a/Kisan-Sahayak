@@ -1,7 +1,10 @@
 import serverless from 'serverless-http';
+import { withLambda } from '@netlify/aws-lambda-compat';
 import { createApp } from '../../server.ts';
 
-// The API is served by Netlify Functions; the static frontend is served by Netlify's CDN.
+// Adapt the Express app's Lambda-style handler to Netlify's modern Functions runtime.
+// This preserves Express routing and ensures POST bodies are translated correctly.
 const app = createApp();
+const expressHandler = serverless(app);
 
-export const handler = serverless(app);
+export default withLambda(expressHandler);
