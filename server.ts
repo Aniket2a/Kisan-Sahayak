@@ -390,10 +390,11 @@ async function startServer() {
     if (!/^[0-9a-f-]{36}$/i.test(targetId)) return res.status(400).json({ error: 'A valid user ID is required.' });
     if ((req as any).adminUser?.authUserId === targetId) return res.status(403).json({ error: 'You cannot delete your own administrator account.' });
     const client = getAdminSupabase();
+    const { data: authTarget, error: authLookupError } = await client.auth.admin.getUserById(targetId);
+    if (authLookupError || !authTarget.user) return res.status(404).json({ error: 'User account was not found.' });
     const { data: target, error: lookupError } = await client.from('profiles').select('id, role').eq('id', targetId).maybeSingle();
     if (lookupError) return res.status(502).json({ error: lookupError.message });
-    if (!target) return res.status(404).json({ error: 'User profile was not found.' });
-    if (target.role === 'admin') {
+    if (target?.role === 'admin') {
       const { count, error: countError } = await client.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'admin');
       if (countError) return res.status(502).json({ error: countError.message });
       if ((count || 0) <= 1) return res.status(409).json({ error: 'The last administrator cannot be deleted.' });
