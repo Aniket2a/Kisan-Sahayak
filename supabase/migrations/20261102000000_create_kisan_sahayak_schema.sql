@@ -8,145 +8,583 @@ BEGIN;
 
 -- ----------------------------------------------------------------------------
 -- 0. PREFLIGHT COMPREHENSIVE VALIDATION
--- Verifies Supabase environment, extensions, and compatibility of existing tables
+-- Verifies extensions, column types, PKs, explicit FK target tables/columns,
+-- unique constraints, exact function signatures, and trigger-to-function bindings.
 -- ----------------------------------------------------------------------------
 DO $$
-DECLARE
-  v_rec record;
-  v_col_count integer;
-  v_pk_exists boolean;
-  v_fk_count integer;
 BEGIN
-  RAISE NOTICE '>>> Step 1: Running comprehensive 9-table preflight validation...';
+  RAISE NOTICE '>>> Step 0: Running comprehensive preflight validation...';
 
-  -- 1.1 Verify auth schema exists
+  -- 0.1 Verify auth schema exists
   IF NOT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'auth') THEN
     RAISE EXCEPTION 'Preflight Abort: Supabase auth schema not found.';
   END IF;
 
-  -- 1.2 Verify pgcrypto extension
+  -- 0.2 Verify pgcrypto extension
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto') THEN
     CREATE EXTENSION IF NOT EXISTS "pgcrypto";
   END IF;
 
-  -- 1.3 Validate existing tables individually for structural compatibility
-  FOR v_rec IN 
-    SELECT table_name 
-    FROM information_schema.tables 
-    WHERE table_schema = 'public' 
-      AND table_name IN ('profiles', 'categories', 'resources', 'bookmarks', 'feedback', 
-                         'community_posts', 'comments', 'post_likes', 'audit_logs')
-  LOOP
-    -- A. Profiles Check
-    IF v_rec.table_name = 'profiles' THEN
-      SELECT count(*) INTO v_col_count FROM information_schema.columns 
-      WHERE table_schema = 'public' AND table_name = 'profiles' 
-        AND column_name IN ('id', 'username', 'full_name', 'state', 'preferred_category', 'role')
-        AND data_type IN ('uuid', 'text');
-      IF v_col_count < 6 THEN
-        RAISE EXCEPTION 'Preflight Abort: Existing profiles table has incompatible column definitions.';
-      END IF;
-      SELECT count(*) > 0 INTO v_pk_exists FROM information_schema.table_constraints 
-      WHERE table_schema = 'public' AND table_name = 'profiles' AND constraint_type = 'PRIMARY KEY';
-      IF NOT v_pk_exists THEN
-        RAISE EXCEPTION 'Preflight Abort: Existing profiles table missing PRIMARY KEY constraint.';
-      END IF;
+  -- 0.3 Validate existing tables, columns, primary keys, unique constraints, and foreign keys
+  -- A. Profiles Preflight Check
+  IF to_regclass('public.profiles') IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'id' AND udt_name = 'uuid') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table profiles missing id column with uuid type.';
     END IF;
-
-    -- B. Categories Check
-    IF v_rec.table_name = 'categories' THEN
-      SELECT count(*) INTO v_col_count FROM information_schema.columns 
-      WHERE table_schema = 'public' AND table_name = 'categories' 
-        AND column_name IN ('id', 'name', 'slug', 'description', 'icon');
-      IF v_col_count < 5 THEN
-        RAISE EXCEPTION 'Preflight Abort: Existing categories table lacks required columns.';
-      END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'username' AND udt_name = 'text') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table profiles missing username column with text type.';
     END IF;
-
-    -- C. Resources Check
-    IF v_rec.table_name = 'resources' THEN
-      SELECT count(*) INTO v_col_count FROM information_schema.columns 
-      WHERE table_schema = 'public' AND table_name = 'resources' 
-        AND column_name IN ('id', 'category_id', 'title', 'description', 'resource_type', 'views_count');
-      IF v_col_count < 6 THEN
-        RAISE EXCEPTION 'Preflight Abort: Existing resources table lacks required columns.';
-      END IF;
-      SELECT count(*) INTO v_fk_count FROM information_schema.referential_constraints rc
-      JOIN information_schema.table_constraints tc ON tc.constraint_name = rc.constraint_name
-      WHERE tc.table_schema = 'public' AND tc.table_name = 'resources';
-      IF v_fk_count < 1 THEN
-        RAISE EXCEPTION 'Preflight Abort: Existing resources table lacks foreign key reference.';
-      END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'full_name' AND udt_name = 'text') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table profiles missing full_name column with text type.';
     END IF;
-
-    -- D. Bookmarks Check
-    IF v_rec.table_name = 'bookmarks' THEN
-      SELECT count(*) INTO v_col_count FROM information_schema.columns 
-      WHERE table_schema = 'public' AND table_name = 'bookmarks' 
-        AND column_name IN ('id', 'user_id', 'resource_id');
-      IF v_col_count < 3 THEN
-        RAISE EXCEPTION 'Preflight Abort: Existing bookmarks table lacks required columns.';
-      END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'role' AND udt_name = 'text') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table profiles missing role column with text type.';
     END IF;
-
-    -- E. Feedback Check
-    IF v_rec.table_name = 'feedback' THEN
-      SELECT count(*) INTO v_col_count FROM information_schema.columns 
-      WHERE table_schema = 'public' AND table_name = 'feedback' 
-        AND column_name IN ('id', 'user_id', 'resource_id', 'rating', 'comment');
-      IF v_col_count < 5 THEN
-        RAISE EXCEPTION 'Preflight Abort: Existing feedback table lacks required columns.';
-      END IF;
+    -- Primary Key Check
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+      WHERE c.conrelid = to_regclass('public.profiles') AND c.contype = 'p' AND a.attname = 'id'
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table profiles missing PRIMARY KEY on column id.';
     END IF;
-
-    -- F. Community Posts Check
-    IF v_rec.table_name = 'community_posts' THEN
-      SELECT count(*) INTO v_col_count FROM information_schema.columns 
-      WHERE table_schema = 'public' AND table_name = 'community_posts' 
-        AND column_name IN ('id', 'user_id', 'author_name', 'title', 'content');
-      IF v_col_count < 5 THEN
-        RAISE EXCEPTION 'Preflight Abort: Existing community_posts table lacks required columns.';
-      END IF;
+    -- Foreign Key Check: profiles.id -> auth.users.id
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class src ON src.oid = c.conrelid
+      JOIN pg_class tgt ON tgt.oid = c.confrelid
+      JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt.relnamespace
+      JOIN pg_attribute src_a ON src_a.attrelid = c.conrelid AND src_a.attnum = ANY(c.conkey)
+      JOIN pg_attribute tgt_a ON tgt_a.attrelid = c.confrelid AND tgt_a.attnum = ANY(c.confkey)
+      WHERE c.contype = 'f'
+        AND src.oid = to_regclass('public.profiles') AND src_a.attname = 'id'
+        AND tgt_ns.nspname = 'auth' AND tgt.relname = 'users' AND tgt_a.attname = 'id'
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table profiles missing FOREIGN KEY on id referencing auth.users(id).';
     END IF;
+  END IF;
 
-    -- G. Comments Check
-    IF v_rec.table_name = 'comments' THEN
-      SELECT count(*) INTO v_col_count FROM information_schema.columns 
-      WHERE table_schema = 'public' AND table_name = 'comments' 
-        AND column_name IN ('id', 'post_id', 'user_id', 'comment');
-      IF v_col_count < 4 THEN
-        RAISE EXCEPTION 'Preflight Abort: Existing comments table lacks required columns.';
-      END IF;
+  -- B. Categories Preflight Check
+  IF to_regclass('public.categories') IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'categories' AND column_name = 'id' AND udt_name IN ('int2', 'int4', 'int8')) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table categories missing integer id column.';
     END IF;
-
-    -- H. Post Likes Check
-    IF v_rec.table_name = 'post_likes' THEN
-      SELECT count(*) INTO v_col_count FROM information_schema.columns 
-      WHERE table_schema = 'public' AND table_name = 'post_likes' 
-        AND column_name IN ('post_id', 'user_id');
-      IF v_col_count < 2 THEN
-        RAISE EXCEPTION 'Preflight Abort: Existing post_likes table lacks required columns.';
-      END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'categories' AND column_name = 'name' AND udt_name = 'text') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table categories missing name text column.';
     END IF;
-
-    -- I. Audit Logs Check
-    IF v_rec.table_name = 'audit_logs' THEN
-      SELECT count(*) INTO v_col_count FROM information_schema.columns 
-      WHERE table_schema = 'public' AND table_name = 'audit_logs' 
-        AND column_name IN ('id', 'action', 'target_type', 'target_id', 'details');
-      IF v_col_count < 5 THEN
-        RAISE EXCEPTION 'Preflight Abort: Existing audit_logs table lacks required columns.';
-      END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'categories' AND column_name = 'slug' AND udt_name = 'text') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table categories missing slug text column.';
     END IF;
-  END LOOP;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = to_regclass('public.categories') AND c.contype = 'p') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table categories missing PRIMARY KEY.';
+    END IF;
+  END IF;
 
-  RAISE NOTICE '>>> Step 1: Preflight validation successful.';
+  -- C. Resources Preflight Check
+  IF to_regclass('public.resources') IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'resources' AND column_name = 'id' AND udt_name IN ('int8', 'int4')) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table resources missing bigint id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'resources' AND column_name = 'category_id' AND udt_name IN ('int2', 'int4', 'int8')) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table resources missing integer category_id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'resources' AND column_name = 'title' AND udt_name = 'text') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table resources missing title text column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'resources' AND column_name = 'resource_type' AND udt_name = 'text') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table resources missing resource_type text column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = to_regclass('public.resources') AND c.contype = 'p') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table resources missing PRIMARY KEY.';
+    END IF;
+    -- Foreign Key Check: resources.category_id -> public.categories.id
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class src ON src.oid = c.conrelid
+      JOIN pg_class tgt ON tgt.oid = c.confrelid
+      JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt.relnamespace
+      JOIN pg_attribute src_a ON src_a.attrelid = c.conrelid AND src_a.attnum = ANY(c.conkey)
+      JOIN pg_attribute tgt_a ON tgt_a.attrelid = c.confrelid AND tgt_a.attnum = ANY(c.confkey)
+      WHERE c.contype = 'f'
+        AND src.oid = to_regclass('public.resources') AND src_a.attname = 'category_id'
+        AND tgt_ns.nspname = 'public' AND tgt.relname = 'categories' AND tgt_a.attname = 'id'
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table resources missing FOREIGN KEY on category_id referencing public.categories(id).';
+    END IF;
+  END IF;
+
+  -- D. Bookmarks Preflight Check
+  IF to_regclass('public.bookmarks') IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'bookmarks' AND column_name = 'id' AND udt_name = 'uuid') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table bookmarks missing uuid id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'bookmarks' AND column_name = 'user_id' AND udt_name = 'uuid') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table bookmarks missing uuid user_id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'bookmarks' AND column_name = 'resource_id' AND udt_name IN ('int8', 'int4')) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table bookmarks missing resource_id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = to_regclass('public.bookmarks') AND c.contype = 'p') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table bookmarks missing PRIMARY KEY.';
+    END IF;
+    -- Foreign Key Check: bookmarks.user_id -> auth.users.id
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class src ON src.oid = c.conrelid
+      JOIN pg_class tgt ON tgt.oid = c.confrelid
+      JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt.relnamespace
+      JOIN pg_attribute src_a ON src_a.attrelid = c.conrelid AND src_a.attnum = ANY(c.conkey)
+      JOIN pg_attribute tgt_a ON tgt_a.attrelid = c.confrelid AND tgt_a.attnum = ANY(c.confkey)
+      WHERE c.contype = 'f'
+        AND src.oid = to_regclass('public.bookmarks') AND src_a.attname = 'user_id'
+        AND tgt_ns.nspname = 'auth' AND tgt.relname = 'users' AND tgt_a.attname = 'id'
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table bookmarks missing FOREIGN KEY on user_id referencing auth.users(id).';
+    END IF;
+    -- Foreign Key Check: bookmarks.resource_id -> public.resources.id
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class src ON src.oid = c.conrelid
+      JOIN pg_class tgt ON tgt.oid = c.confrelid
+      JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt.relnamespace
+      JOIN pg_attribute src_a ON src_a.attrelid = c.conrelid AND src_a.attnum = ANY(c.conkey)
+      JOIN pg_attribute tgt_a ON tgt_a.attrelid = c.confrelid AND tgt_a.attnum = ANY(c.confkey)
+      WHERE c.contype = 'f'
+        AND src.oid = to_regclass('public.bookmarks') AND src_a.attname = 'resource_id'
+        AND tgt_ns.nspname = 'public' AND tgt.relname = 'resources' AND tgt_a.attname = 'id'
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table bookmarks missing FOREIGN KEY on resource_id referencing public.resources(id).';
+    END IF;
+  END IF;
+
+  -- E. Feedback Preflight Check
+  IF to_regclass('public.feedback') IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'feedback' AND column_name = 'id' AND udt_name IN ('int8', 'int4')) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table feedback missing id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'feedback' AND column_name = 'user_id' AND udt_name = 'uuid') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table feedback missing uuid user_id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'feedback' AND column_name = 'resource_id' AND udt_name IN ('int8', 'int4')) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table feedback missing resource_id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'feedback' AND column_name = 'rating' AND udt_name IN ('int2', 'int4', 'int8')) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table feedback missing integer rating column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = to_regclass('public.feedback') AND c.contype = 'p') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table feedback missing PRIMARY KEY.';
+    END IF;
+    -- Foreign Key Check: feedback.user_id -> auth.users.id
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class src ON src.oid = c.conrelid
+      JOIN pg_class tgt ON tgt.oid = c.confrelid
+      JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt.relnamespace
+      JOIN pg_attribute src_a ON src_a.attrelid = c.conrelid AND src_a.attnum = ANY(c.conkey)
+      JOIN pg_attribute tgt_a ON tgt_a.attrelid = c.confrelid AND tgt_a.attnum = ANY(c.confkey)
+      WHERE c.contype = 'f'
+        AND src.oid = to_regclass('public.feedback') AND src_a.attname = 'user_id'
+        AND tgt_ns.nspname = 'auth' AND tgt.relname = 'users' AND tgt_a.attname = 'id'
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table feedback missing FOREIGN KEY on user_id referencing auth.users(id).';
+    END IF;
+    -- Foreign Key Check: feedback.resource_id -> public.resources.id
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class src ON src.oid = c.conrelid
+      JOIN pg_class tgt ON tgt.oid = c.confrelid
+      JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt.relnamespace
+      JOIN pg_attribute src_a ON src_a.attrelid = c.conrelid AND src_a.attnum = ANY(c.conkey)
+      JOIN pg_attribute tgt_a ON tgt_a.attrelid = c.confrelid AND tgt_a.attnum = ANY(c.confkey)
+      WHERE c.contype = 'f'
+        AND src.oid = to_regclass('public.feedback') AND src_a.attname = 'resource_id'
+        AND tgt_ns.nspname = 'public' AND tgt.relname = 'resources' AND tgt_a.attname = 'id'
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table feedback missing FOREIGN KEY on resource_id referencing public.resources(id).';
+    END IF;
+  END IF;
+
+  -- F. Community Posts Preflight Check
+  IF to_regclass('public.community_posts') IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'community_posts' AND column_name = 'id' AND udt_name IN ('int8', 'int4')) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table community_posts missing id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'community_posts' AND column_name = 'user_id' AND udt_name = 'uuid') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table community_posts missing uuid user_id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = to_regclass('public.community_posts') AND c.contype = 'p') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table community_posts missing PRIMARY KEY.';
+    END IF;
+    -- Foreign Key Check: community_posts.user_id -> auth.users.id
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class src ON src.oid = c.conrelid
+      JOIN pg_class tgt ON tgt.oid = c.confrelid
+      JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt.relnamespace
+      JOIN pg_attribute src_a ON src_a.attrelid = c.conrelid AND src_a.attnum = ANY(c.conkey)
+      JOIN pg_attribute tgt_a ON tgt_a.attrelid = c.confrelid AND tgt_a.attnum = ANY(c.confkey)
+      WHERE c.contype = 'f'
+        AND src.oid = to_regclass('public.community_posts') AND src_a.attname = 'user_id'
+        AND tgt_ns.nspname = 'auth' AND tgt.relname = 'users' AND tgt_a.attname = 'id'
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table community_posts missing FOREIGN KEY on user_id referencing auth.users(id).';
+    END IF;
+  END IF;
+
+  -- G. Comments Preflight Check
+  IF to_regclass('public.comments') IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'comments' AND column_name = 'id' AND udt_name IN ('int8', 'int4')) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table comments missing id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'comments' AND column_name = 'post_id' AND udt_name IN ('int8', 'int4')) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table comments missing post_id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'comments' AND column_name = 'user_id' AND udt_name = 'uuid') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table comments missing uuid user_id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = to_regclass('public.comments') AND c.contype = 'p') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table comments missing PRIMARY KEY.';
+    END IF;
+    -- Foreign Key Check: comments.post_id -> public.community_posts.id
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class src ON src.oid = c.conrelid
+      JOIN pg_class tgt ON tgt.oid = c.confrelid
+      JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt.relnamespace
+      JOIN pg_attribute src_a ON src_a.attrelid = c.conrelid AND src_a.attnum = ANY(c.conkey)
+      JOIN pg_attribute tgt_a ON tgt_a.attrelid = c.confrelid AND tgt_a.attnum = ANY(c.confkey)
+      WHERE c.contype = 'f'
+        AND src.oid = to_regclass('public.comments') AND src_a.attname = 'post_id'
+        AND tgt_ns.nspname = 'public' AND tgt.relname = 'community_posts' AND tgt_a.attname = 'id'
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table comments missing FOREIGN KEY on post_id referencing public.community_posts(id).';
+    END IF;
+    -- Foreign Key Check: comments.user_id -> auth.users.id
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class src ON src.oid = c.conrelid
+      JOIN pg_class tgt ON tgt.oid = c.confrelid
+      JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt.relnamespace
+      JOIN pg_attribute src_a ON src_a.attrelid = c.conrelid AND src_a.attnum = ANY(c.conkey)
+      JOIN pg_attribute tgt_a ON tgt_a.attrelid = c.confrelid AND tgt_a.attnum = ANY(c.confkey)
+      WHERE c.contype = 'f'
+        AND src.oid = to_regclass('public.comments') AND src_a.attname = 'user_id'
+        AND tgt_ns.nspname = 'auth' AND tgt.relname = 'users' AND tgt_a.attname = 'id'
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table comments missing FOREIGN KEY on user_id referencing auth.users(id).';
+    END IF;
+  END IF;
+
+  -- H. Post Likes Preflight Check
+  IF to_regclass('public.post_likes') IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'post_likes' AND column_name = 'post_id' AND udt_name IN ('int8', 'int4')) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table post_likes missing post_id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'post_likes' AND column_name = 'user_id' AND udt_name = 'uuid') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table post_likes missing uuid user_id column.';
+    END IF;
+    -- Foreign Key Check: post_likes.post_id -> public.community_posts.id
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class src ON src.oid = c.conrelid
+      JOIN pg_class tgt ON tgt.oid = c.confrelid
+      JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt.relnamespace
+      JOIN pg_attribute src_a ON src_a.attrelid = c.conrelid AND src_a.attnum = ANY(c.conkey)
+      JOIN pg_attribute tgt_a ON tgt_a.attrelid = c.confrelid AND tgt_a.attnum = ANY(c.confkey)
+      WHERE c.contype = 'f'
+        AND src.oid = to_regclass('public.post_likes') AND src_a.attname = 'post_id'
+        AND tgt_ns.nspname = 'public' AND tgt.relname = 'community_posts' AND tgt_a.attname = 'id'
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table post_likes missing FOREIGN KEY on post_id referencing public.community_posts(id).';
+    END IF;
+    -- Foreign Key Check: post_likes.user_id -> auth.users.id
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class src ON src.oid = c.conrelid
+      JOIN pg_class tgt ON tgt.oid = c.confrelid
+      JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt.relnamespace
+      JOIN pg_attribute src_a ON src_a.attrelid = c.conrelid AND src_a.attnum = ANY(c.conkey)
+      JOIN pg_attribute tgt_a ON tgt_a.attrelid = c.confrelid AND tgt_a.attnum = ANY(c.confkey)
+      WHERE c.contype = 'f'
+        AND src.oid = to_regclass('public.post_likes') AND src_a.attname = 'user_id'
+        AND tgt_ns.nspname = 'auth' AND tgt.relname = 'users' AND tgt_a.attname = 'id'
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Table post_likes missing FOREIGN KEY on user_id referencing auth.users(id).';
+    END IF;
+  END IF;
+
+  -- I. Audit Logs Preflight Check
+  IF to_regclass('public.audit_logs') IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'audit_logs' AND column_name = 'id' AND udt_name = 'uuid') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table audit_logs missing uuid id column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'audit_logs' AND column_name = 'action' AND udt_name = 'text') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table audit_logs missing action column.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = to_regclass('public.audit_logs') AND c.contype = 'p') THEN
+      RAISE EXCEPTION 'Preflight Abort: Table audit_logs missing PRIMARY KEY.';
+    END IF;
+  END IF;
+
+  -- 0.4 Validate existing functions using exact function signatures
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'admin_set_user_role' AND pronamespace = 'public'::regnamespace) THEN
+    IF to_regprocedure('public.admin_set_user_role(uuid, text)') IS NULL THEN
+      RAISE EXCEPTION 'Preflight Abort: Function admin_set_user_role exists with incompatible signature.';
+    END IF;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_increment_resource_view' AND pronamespace = 'public'::regnamespace) THEN
+    IF to_regprocedure('public.fn_increment_resource_view(bigint)') IS NULL THEN
+      RAISE EXCEPTION 'Preflight Abort: Function fn_increment_resource_view exists with incompatible signature.';
+    END IF;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_protect_profile_mutations' AND pronamespace = 'public'::regnamespace) THEN
+    IF to_regprocedure('public.fn_protect_profile_mutations()') IS NULL THEN
+      RAISE EXCEPTION 'Preflight Abort: Function fn_protect_profile_mutations exists with incompatible signature.';
+    END IF;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_handle_new_auth_user' AND pronamespace = 'public'::regnamespace) THEN
+    IF to_regprocedure('public.fn_handle_new_auth_user()') IS NULL THEN
+      RAISE EXCEPTION 'Preflight Abort: Function fn_handle_new_auth_user exists with incompatible signature.';
+    END IF;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_stamp_feedback_author_snapshot' AND pronamespace = 'public'::regnamespace) THEN
+    IF to_regprocedure('public.fn_stamp_feedback_author_snapshot()') IS NULL THEN
+      RAISE EXCEPTION 'Preflight Abort: Function fn_stamp_feedback_author_snapshot exists with incompatible signature.';
+    END IF;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_protect_feedback_mutations' AND pronamespace = 'public'::regnamespace) THEN
+    IF to_regprocedure('public.fn_protect_feedback_mutations()') IS NULL THEN
+      RAISE EXCEPTION 'Preflight Abort: Function fn_protect_feedback_mutations exists with incompatible signature.';
+    END IF;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_stamp_post_author_snapshot' AND pronamespace = 'public'::regnamespace) THEN
+    IF to_regprocedure('public.fn_stamp_post_author_snapshot()') IS NULL THEN
+      RAISE EXCEPTION 'Preflight Abort: Function fn_stamp_post_author_snapshot exists with incompatible signature.';
+    END IF;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_protect_post_mutations' AND pronamespace = 'public'::regnamespace) THEN
+    IF to_regprocedure('public.fn_protect_post_mutations()') IS NULL THEN
+      RAISE EXCEPTION 'Preflight Abort: Function fn_protect_post_mutations exists with incompatible signature.';
+    END IF;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_stamp_comment_author_snapshot' AND pronamespace = 'public'::regnamespace) THEN
+    IF to_regprocedure('public.fn_stamp_comment_author_snapshot()') IS NULL THEN
+      RAISE EXCEPTION 'Preflight Abort: Function fn_stamp_comment_author_snapshot exists with incompatible signature.';
+    END IF;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_protect_comment_mutations' AND pronamespace = 'public'::regnamespace) THEN
+    IF to_regprocedure('public.fn_protect_comment_mutations()') IS NULL THEN
+      RAISE EXCEPTION 'Preflight Abort: Function fn_protect_comment_mutations exists with incompatible signature.';
+    END IF;
+  END IF;
+
+  -- 0.5 Validate existing triggers reference expected trigger functions
+  IF to_regclass('public.profiles') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_profile_mutations' AND tgrelid = to_regclass('public.profiles') AND NOT tgisinternal) THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger 
+      WHERE tgname = 'trg_protect_profile_mutations' 
+        AND tgrelid = to_regclass('public.profiles') 
+        AND tgfoid = to_regproc('public.fn_protect_profile_mutations')
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Trigger trg_protect_profile_mutations references unexpected function.';
+    END IF;
+  END IF;
+
+  IF to_regclass('auth.users') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_on_auth_user_created' AND tgrelid = to_regclass('auth.users') AND NOT tgisinternal) THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger 
+      WHERE tgname = 'trg_on_auth_user_created' 
+        AND tgrelid = to_regclass('auth.users') 
+        AND tgfoid = to_regproc('public.fn_handle_new_auth_user')
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Trigger trg_on_auth_user_created references unexpected function.';
+    END IF;
+  END IF;
+
+  IF to_regclass('public.feedback') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_stamp_feedback_author' AND tgrelid = to_regclass('public.feedback') AND NOT tgisinternal) THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger 
+      WHERE tgname = 'trg_stamp_feedback_author' 
+        AND tgrelid = to_regclass('public.feedback') 
+        AND tgfoid = to_regproc('public.fn_stamp_feedback_author_snapshot')
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Trigger trg_stamp_feedback_author references unexpected function.';
+    END IF;
+  END IF;
+
+  IF to_regclass('public.feedback') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_feedback_mutations' AND tgrelid = to_regclass('public.feedback') AND NOT tgisinternal) THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger 
+      WHERE tgname = 'trg_protect_feedback_mutations' 
+        AND tgrelid = to_regclass('public.feedback') 
+        AND tgfoid = to_regproc('public.fn_protect_feedback_mutations')
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Trigger trg_protect_feedback_mutations references unexpected function.';
+    END IF;
+  END IF;
+
+  IF to_regclass('public.community_posts') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_stamp_post_author' AND tgrelid = to_regclass('public.community_posts') AND NOT tgisinternal) THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger 
+      WHERE tgname = 'trg_stamp_post_author' 
+        AND tgrelid = to_regclass('public.community_posts') 
+        AND tgfoid = to_regproc('public.fn_stamp_post_author_snapshot')
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Trigger trg_stamp_post_author references unexpected function.';
+    END IF;
+  END IF;
+
+  IF to_regclass('public.community_posts') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_post_mutations' AND tgrelid = to_regclass('public.community_posts') AND NOT tgisinternal) THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger 
+      WHERE tgname = 'trg_protect_post_mutations' 
+        AND tgrelid = to_regclass('public.community_posts') 
+        AND tgfoid = to_regproc('public.fn_protect_post_mutations')
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Trigger trg_protect_post_mutations references unexpected function.';
+    END IF;
+  END IF;
+
+  IF to_regclass('public.comments') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_stamp_comment_author' AND tgrelid = to_regclass('public.comments') AND NOT tgisinternal) THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger 
+      WHERE tgname = 'trg_stamp_comment_author' 
+        AND tgrelid = to_regclass('public.comments') 
+        AND tgfoid = to_regproc('public.fn_stamp_comment_author_snapshot')
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Trigger trg_stamp_comment_author references unexpected function.';
+    END IF;
+  END IF;
+
+  IF to_regclass('public.comments') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_comment_mutations' AND tgrelid = to_regclass('public.comments') AND NOT tgisinternal) THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger 
+      WHERE tgname = 'trg_protect_comment_mutations' 
+        AND tgrelid = to_regclass('public.comments') 
+        AND tgfoid = to_regproc('public.fn_protect_comment_mutations')
+    ) THEN
+      RAISE EXCEPTION 'Preflight Abort: Trigger trg_protect_comment_mutations references unexpected function.';
+    END IF;
+  END IF;
+
+  RAISE NOTICE '>>> Step 0: Preflight validation successful.';
 END $$;
 
 -- ----------------------------------------------------------------------------
 -- 1. DYNAMIC PRE-STATE INVENTORY CAPTURE
--- Records precise pre-existence of every affected object
+-- Captured BEFORE creating _kisan_migration_manifest for accurate rollback ownership
 -- ----------------------------------------------------------------------------
+CREATE TEMPORARY TABLE _kisan_inventory (
+  obj_name text PRIMARY KEY,
+  obj_type text NOT NULL,
+  pre_existed boolean NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO _kisan_inventory (obj_name, obj_type, pre_existed)
+VALUES
+  -- Tables
+  ('profiles', 'table', to_regclass('public.profiles') IS NOT NULL),
+  ('categories', 'table', to_regclass('public.categories') IS NOT NULL),
+  ('resources', 'table', to_regclass('public.resources') IS NOT NULL),
+  ('bookmarks', 'table', to_regclass('public.bookmarks') IS NOT NULL),
+  ('feedback', 'table', to_regclass('public.feedback') IS NOT NULL),
+  ('community_posts', 'table', to_regclass('public.community_posts') IS NOT NULL),
+  ('comments', 'table', to_regclass('public.comments') IS NOT NULL),
+  ('post_likes', 'table', to_regclass('public.post_likes') IS NOT NULL),
+  ('audit_logs', 'table', to_regclass('public.audit_logs') IS NOT NULL),
+  ('_kisan_migration_manifest', 'table', to_regclass('public._kisan_migration_manifest') IS NOT NULL),
+  -- Views
+  ('v_community_posts', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_community_posts')),
+  ('v_community_comments', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_community_comments')),
+  ('v_resource_feedback', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_resource_feedback')),
+  ('v_resource_ratings', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_resource_ratings')),
+  -- Functions (validated by exact procedure signature)
+  ('fn_protect_profile_mutations', 'function', to_regprocedure('public.fn_protect_profile_mutations()') IS NOT NULL),
+  ('admin_set_user_role', 'function', to_regprocedure('public.admin_set_user_role(uuid, text)') IS NOT NULL),
+  ('fn_handle_new_auth_user', 'function', to_regprocedure('public.fn_handle_new_auth_user()') IS NOT NULL),
+  ('fn_stamp_feedback_author_snapshot', 'function', to_regprocedure('public.fn_stamp_feedback_author_snapshot()') IS NOT NULL),
+  ('fn_protect_feedback_mutations', 'function', to_regprocedure('public.fn_protect_feedback_mutations()') IS NOT NULL),
+  ('fn_stamp_post_author_snapshot', 'function', to_regprocedure('public.fn_stamp_post_author_snapshot()') IS NOT NULL),
+  ('fn_protect_post_mutations', 'function', to_regprocedure('public.fn_protect_post_mutations()') IS NOT NULL),
+  ('fn_stamp_comment_author_snapshot', 'function', to_regprocedure('public.fn_stamp_comment_author_snapshot()') IS NOT NULL),
+  ('fn_protect_comment_mutations', 'function', to_regprocedure('public.fn_protect_comment_mutations()') IS NOT NULL),
+  ('fn_increment_resource_view', 'function', to_regprocedure('public.fn_increment_resource_view(bigint)') IS NOT NULL),
+  -- Triggers (validated against trigger name, target table, and expected function)
+  ('trg_protect_profile_mutations', 'trigger', EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE to_regclass('public.profiles') IS NOT NULL
+      AND t.tgrelid = to_regclass('public.profiles')
+      AND t.tgname = 'trg_protect_profile_mutations'
+      AND t.tgfoid = to_regproc('public.fn_protect_profile_mutations')
+      AND NOT t.tgisinternal
+  )),
+  ('trg_on_auth_user_created', 'trigger', EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE to_regclass('auth.users') IS NOT NULL
+      AND t.tgrelid = to_regclass('auth.users')
+      AND t.tgname = 'trg_on_auth_user_created'
+      AND t.tgfoid = to_regproc('public.fn_handle_new_auth_user')
+      AND NOT t.tgisinternal
+  )),
+  ('trg_stamp_feedback_author', 'trigger', EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE to_regclass('public.feedback') IS NOT NULL
+      AND t.tgrelid = to_regclass('public.feedback')
+      AND t.tgname = 'trg_stamp_feedback_author'
+      AND t.tgfoid = to_regproc('public.fn_stamp_feedback_author_snapshot')
+      AND NOT t.tgisinternal
+  )),
+  ('trg_protect_feedback_mutations', 'trigger', EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE to_regclass('public.feedback') IS NOT NULL
+      AND t.tgrelid = to_regclass('public.feedback')
+      AND t.tgname = 'trg_protect_feedback_mutations'
+      AND t.tgfoid = to_regproc('public.fn_protect_feedback_mutations')
+      AND NOT t.tgisinternal
+  )),
+  ('trg_stamp_post_author', 'trigger', EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE to_regclass('public.community_posts') IS NOT NULL
+      AND t.tgrelid = to_regclass('public.community_posts')
+      AND t.tgname = 'trg_stamp_post_author'
+      AND t.tgfoid = to_regproc('public.fn_stamp_post_author_snapshot')
+      AND NOT t.tgisinternal
+  )),
+  ('trg_protect_post_mutations', 'trigger', EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE to_regclass('public.community_posts') IS NOT NULL
+      AND t.tgrelid = to_regclass('public.community_posts')
+      AND t.tgname = 'trg_protect_post_mutations'
+      AND t.tgfoid = to_regproc('public.fn_protect_post_mutations')
+      AND NOT t.tgisinternal
+  )),
+  ('trg_stamp_comment_author', 'trigger', EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE to_regclass('public.comments') IS NOT NULL
+      AND t.tgrelid = to_regclass('public.comments')
+      AND t.tgname = 'trg_stamp_comment_author'
+      AND t.tgfoid = to_regproc('public.fn_stamp_comment_author_snapshot')
+      AND NOT t.tgisinternal
+  )),
+  ('trg_protect_comment_mutations', 'trigger', EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE to_regclass('public.comments') IS NOT NULL
+      AND t.tgrelid = to_regclass('public.comments')
+      AND t.tgname = 'trg_protect_comment_mutations'
+      AND t.tgfoid = to_regproc('public.fn_protect_comment_mutations')
+      AND NOT t.tgisinternal
+  ));
+
+-- Create _kisan_migration_manifest AFTER pre-state inventory is captured
 CREATE TABLE IF NOT EXISTS public._kisan_migration_manifest (
   migration_id text PRIMARY KEY,
   applied_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
@@ -157,58 +595,13 @@ CREATE TABLE IF NOT EXISTS public._kisan_migration_manifest (
   pre_existing_definitions jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 
--- Enable RLS and lock manifest immediately to trusted administrative roles only
 ALTER TABLE public._kisan_migration_manifest ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public._kisan_migration_manifest FROM PUBLIC, anon, authenticated;
 GRANT ALL ON TABLE public._kisan_migration_manifest TO postgres, service_role;
 
-CREATE TEMPORARY TABLE _kisan_inventory (
-  obj_name text PRIMARY KEY,
-  obj_type text NOT NULL,
-  pre_existed boolean NOT NULL
-) ON COMMIT DROP;
-
-INSERT INTO _kisan_inventory (obj_name, obj_type, pre_existed)
-VALUES
-  -- Tables
-  ('profiles', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='profiles')),
-  ('categories', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='categories')),
-  ('resources', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='resources')),
-  ('bookmarks', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='bookmarks')),
-  ('feedback', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='feedback')),
-  ('community_posts', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='community_posts')),
-  ('comments', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='comments')),
-  ('post_likes', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='post_likes')),
-  ('audit_logs', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='audit_logs')),
-  ('_kisan_migration_manifest', 'table', EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='_kisan_migration_manifest')),
-  -- Views
-  ('v_community_posts', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_community_posts')),
-  ('v_community_comments', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_community_comments')),
-  ('v_resource_feedback', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_resource_feedback')),
-  ('v_resource_ratings', 'view', EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema='public' AND table_name='v_resource_ratings')),
-  -- Functions
-  ('fn_protect_profile_mutations', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_protect_profile_mutations' AND pronamespace='public'::regnamespace)),
-  ('admin_set_user_role', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='admin_set_user_role' AND pronamespace='public'::regnamespace)),
-  ('fn_handle_new_auth_user', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_handle_new_auth_user' AND pronamespace='public'::regnamespace)),
-  ('fn_stamp_feedback_author_snapshot', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_stamp_feedback_author_snapshot' AND pronamespace='public'::regnamespace)),
-  ('fn_protect_feedback_mutations', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_protect_feedback_mutations' AND pronamespace='public'::regnamespace)),
-  ('fn_stamp_post_author_snapshot', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_stamp_post_author_snapshot' AND pronamespace='public'::regnamespace)),
-  ('fn_protect_post_mutations', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_protect_post_mutations' AND pronamespace='public'::regnamespace)),
-  ('fn_stamp_comment_author_snapshot', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_stamp_comment_author_snapshot' AND pronamespace='public'::regnamespace)),
-  ('fn_protect_comment_mutations', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_protect_comment_mutations' AND pronamespace='public'::regnamespace)),
-  ('fn_increment_resource_view', 'function', EXISTS (SELECT 1 FROM pg_proc WHERE proname='fn_increment_resource_view' AND pronamespace='public'::regnamespace)),
-  -- Triggers
-  ('trg_protect_profile_mutations', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_protect_profile_mutations')),
-  ('trg_on_auth_user_created', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_on_auth_user_created')),
-  ('trg_stamp_feedback_author', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_stamp_feedback_author')),
-  ('trg_protect_feedback_mutations', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_protect_feedback_mutations')),
-  ('trg_stamp_post_author', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_stamp_post_author')),
-  ('trg_protect_post_mutations', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_protect_post_mutations')),
-  ('trg_stamp_comment_author', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_stamp_comment_author')),
-  ('trg_protect_comment_mutations', 'trigger', EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_protect_comment_mutations'));
-
 -- ----------------------------------------------------------------------------
--- 2. PROFILES TABLE & MULTI-LAYER ROLE ESCALATION PROTECTION
+-- 2. PROFILES TABLE & ROLE ESCALATION PROTECTION
+-- Non-destructive creation: Existing functions and triggers are not replaced
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.profiles (
   id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -227,39 +620,49 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_username_lower ON public.profiles (lower(username));
 CREATE INDEX IF NOT EXISTS idx_profiles_state ON public.profiles (state);
 
--- Function: Trigger to block client-side role and user ID tampering
-CREATE OR REPLACE FUNCTION public.fn_protect_profile_mutations()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-BEGIN
-  IF NEW.id <> OLD.id THEN
-    RAISE EXCEPTION 'Profile user identifier (id) is immutable.';
-  END IF;
-
-  IF NEW.username <> OLD.username THEN
-    RAISE EXCEPTION 'Username cannot be modified after registration.';
-  END IF;
-
-  IF NEW.role IS DISTINCT FROM OLD.role THEN
-    IF current_setting('kisan.admin_role_change', true) IS DISTINCT FROM 'allowed' THEN
-      RAISE EXCEPTION 'Privilege escalation rejected: Direct role modification is prohibited. Use admin_set_user_role().';
-    END IF;
-  END IF;
-
-  NEW.updated_at := timezone('utc'::text, now());
-  RETURN NEW;
-END;
-$$;
-
--- Idempotent Trigger Creation: Protect existing triggers without blind drops
+-- Function: Trigger to block client-side role and user ID tampering (Validated by signature)
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger
-    WHERE tgname = 'trg_protect_profile_mutations'
+  IF to_regprocedure('public.fn_protect_profile_mutations()') IS NULL THEN
+    EXECUTE $func$
+      CREATE FUNCTION public.fn_protect_profile_mutations()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+      SET search_path = public, pg_temp
+      AS $body$
+      BEGIN
+        IF NEW.id <> OLD.id THEN
+          RAISE EXCEPTION 'Profile user identifier (id) is immutable.';
+        END IF;
+
+        IF NEW.username <> OLD.username THEN
+          RAISE EXCEPTION 'Username cannot be modified after registration.';
+        END IF;
+
+        IF NEW.role IS DISTINCT FROM OLD.role THEN
+          IF current_setting('kisan.admin_role_change', true) IS DISTINCT FROM 'allowed' THEN
+            RAISE EXCEPTION 'Privilege escalation rejected: Direct role modification is prohibited. Use admin_set_user_role().';
+          END IF;
+        END IF;
+
+        NEW.updated_at := timezone('utc'::text, now());
+        RETURN NEW;
+      END;
+      $body$;
+    $func$;
+  END IF;
+END $$;
+
+-- Idempotent Trigger: Validates trigger name, target table, and function binding
+DO $$
+BEGIN
+  IF to_regclass('public.profiles') IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = to_regclass('public.profiles')
+      AND t.tgname = 'trg_protect_profile_mutations'
+      AND t.tgfoid = to_regproc('public.fn_protect_profile_mutations')
+      AND NOT t.tgisinternal
   ) THEN
     EXECUTE 'CREATE TRIGGER trg_protect_profile_mutations
       BEFORE UPDATE ON public.profiles
@@ -268,94 +671,111 @@ BEGIN
   END IF;
 END $$;
 
--- Function: Privileged server-side role assignment (Service Role only)
-CREATE OR REPLACE FUNCTION public.admin_set_user_role(
-  p_target_user_id uuid,
-  p_new_role text
-)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-BEGIN
-  IF COALESCE(current_setting('request.jwt.claim.role', true), '') <> 'service_role' 
-     AND session_user NOT IN ('postgres', 'supabase_admin') THEN
-    RAISE EXCEPTION 'Unauthorized: admin_set_user_role requires trusted server-side administrative credentials.';
-  END IF;
-
-  IF p_new_role NOT IN ('user', 'admin') THEN
-    RAISE EXCEPTION 'Invalid role specified: %', p_new_role;
-  END IF;
-
-  PERFORM set_config('kisan.admin_role_change', 'allowed', true);
-
-  UPDATE public.profiles
-  SET role = p_new_role, updated_at = timezone('utc'::text, now())
-  WHERE id = p_target_user_id;
-
-  INSERT INTO public.audit_logs (action, target_type, target_id, details)
-  VALUES ('ROLE_CHANGED', 'profile', p_target_user_id::text, jsonb_build_object('new_role', p_new_role));
-END;
-$$;
-
--- Function: Concurrency-safe profile generation on auth.users registration
-CREATE OR REPLACE FUNCTION public.fn_handle_new_auth_user()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-DECLARE
-  v_raw_username text;
-  v_clean_username text;
-  v_candidate_username text;
-  v_full_name text;
-  v_state text;
-  v_pref_cat text;
-  v_retry_count integer := 0;
-  v_inserted boolean := false;
-BEGIN
-  v_raw_username := COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1));
-  v_clean_username := regexp_replace(lower(trim(v_raw_username)), '[^a-z0-9_]', '_', 'g');
-  
-  IF char_length(v_clean_username) < 3 THEN
-    v_clean_username := 'farmer_' || substr(md5(NEW.id::text), 1, 6);
-  END IF;
-
-  v_full_name := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'full_name'), ''), 'Kisan Farmer');
-  v_state := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'state'), ''), 'General');
-  v_pref_cat := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'preferred_category'), ''), 'General');
-  v_candidate_username := v_clean_username;
-
-  WHILE NOT v_inserted AND v_retry_count < 5 LOOP
-    BEGIN
-      INSERT INTO public.profiles (id, username, full_name, state, preferred_category, role)
-      VALUES (NEW.id, v_candidate_username, v_full_name, v_state, v_pref_cat, 'user');
-      v_inserted := true;
-    EXCEPTION WHEN unique_violation THEN
-      v_retry_count := v_retry_count + 1;
-      v_candidate_username := v_clean_username || '_' || substr(md5(random()::text || clock_timestamp()::text), 1, 4);
-    END;
-  END LOOP;
-
-  IF NOT v_inserted THEN
-    v_candidate_username := 'farmer_' || substr(replace(NEW.id::text, '-', ''), 1, 10);
-    INSERT INTO public.profiles (id, username, full_name, state, preferred_category, role)
-    VALUES (NEW.id, v_candidate_username, v_full_name, v_state, v_pref_cat, 'user')
-    ON CONFLICT (id) DO NOTHING;
-  END IF;
-
-  RETURN NEW;
-END;
-$$;
-
--- Idempotent Trigger Creation on auth.users: Non-destructive
+-- Function: Privileged server-side role assignment (Validated by signature)
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger
-    WHERE tgname = 'trg_on_auth_user_created'
+  IF to_regprocedure('public.admin_set_user_role(uuid, text)') IS NULL THEN
+    EXECUTE $func$
+      CREATE FUNCTION public.admin_set_user_role(
+        p_target_user_id uuid,
+        p_new_role text
+      )
+      RETURNS void
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+      SET search_path = public, pg_temp
+      AS $body$
+      BEGIN
+        IF COALESCE(current_setting('request.jwt.claim.role', true), '') <> 'service_role' 
+           AND session_user NOT IN ('postgres', 'supabase_admin') THEN
+          RAISE EXCEPTION 'Unauthorized: admin_set_user_role requires trusted server-side administrative credentials.';
+        END IF;
+
+        IF p_new_role NOT IN ('user', 'admin') THEN
+          RAISE EXCEPTION 'Invalid role specified: %', p_new_role;
+        END IF;
+
+        PERFORM set_config('kisan.admin_role_change', 'allowed', true);
+
+        UPDATE public.profiles
+        SET role = p_new_role, updated_at = timezone('utc'::text, now())
+        WHERE id = p_target_user_id;
+
+        INSERT INTO public.audit_logs (action, target_type, target_id, details)
+        VALUES ('ROLE_CHANGED', 'profile', p_target_user_id::text, jsonb_build_object('new_role', p_new_role));
+      END;
+      $body$;
+    $func$;
+  END IF;
+END $$;
+
+-- Function: Profile generation on auth.users registration (Validated by signature)
+DO $$
+BEGIN
+  IF to_regprocedure('public.fn_handle_new_auth_user()') IS NULL THEN
+    EXECUTE $func$
+      CREATE FUNCTION public.fn_handle_new_auth_user()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+      SET search_path = public, pg_temp
+      AS $body$
+      DECLARE
+        v_raw_username text;
+        v_clean_username text;
+        v_candidate_username text;
+        v_full_name text;
+        v_state text;
+        v_pref_cat text;
+        v_retry_count integer := 0;
+        v_inserted boolean := false;
+      BEGIN
+        v_raw_username := COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1));
+        v_clean_username := regexp_replace(lower(trim(v_raw_username)), '[^a-z0-9_]', '_', 'g');
+        
+        IF char_length(v_clean_username) < 3 THEN
+          v_clean_username := 'farmer_' || substr(md5(NEW.id::text), 1, 6);
+        END IF;
+
+        v_full_name := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'full_name'), ''), 'Kisan Farmer');
+        v_state := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'state'), ''), 'General');
+        v_pref_cat := COALESCE(NULLIF(trim(NEW.raw_user_meta_data->>'preferred_category'), ''), 'General');
+        v_candidate_username := v_clean_username;
+
+        WHILE NOT v_inserted AND v_retry_count < 5 LOOP
+          BEGIN
+            INSERT INTO public.profiles (id, username, full_name, state, preferred_category, role)
+            VALUES (NEW.id, v_candidate_username, v_full_name, v_state, v_pref_cat, 'user');
+            v_inserted := true;
+          EXCEPTION WHEN unique_violation THEN
+            v_retry_count := v_retry_count + 1;
+            v_candidate_username := v_clean_username || '_' || substr(md5(random()::text || clock_timestamp()::text), 1, 4);
+          END;
+        END LOOP;
+
+        IF NOT v_inserted THEN
+          v_candidate_username := 'farmer_' || substr(replace(NEW.id::text, '-', ''), 1, 10);
+          INSERT INTO public.profiles (id, username, full_name, state, preferred_category, role)
+          VALUES (NEW.id, v_candidate_username, v_full_name, v_state, v_pref_cat, 'user')
+          ON CONFLICT (id) DO NOTHING;
+        END IF;
+
+        RETURN NEW;
+      END;
+      $body$;
+    $func$;
+  END IF;
+END $$;
+
+-- Idempotent Trigger on auth.users: Validates trigger name, target table, and function binding
+DO $$
+BEGIN
+  IF to_regclass('auth.users') IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = to_regclass('auth.users')
+      AND t.tgname = 'trg_on_auth_user_created'
+      AND t.tgfoid = to_regproc('public.fn_handle_new_auth_user')
+      AND NOT t.tgisinternal
   ) THEN
     EXECUTE 'CREATE TRIGGER trg_on_auth_user_created
       AFTER INSERT ON auth.users
@@ -365,7 +785,8 @@ BEGIN
 END $$;
 
 -- ----------------------------------------------------------------------------
--- 3. APPLICATION TABLES
+-- 3. APPLICATION TABLES & ASSOCIATED FUNCTIONS/TRIGGERS
+-- Non-destructive creation: Existing objects are preserved
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.categories (
   id smallint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
@@ -428,34 +849,43 @@ CREATE TABLE IF NOT EXISTS public.feedback (
 CREATE INDEX IF NOT EXISTS idx_feedback_resource ON public.feedback (resource_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_user ON public.feedback (user_id);
 
-CREATE OR REPLACE FUNCTION public.fn_stamp_feedback_author_snapshot()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-BEGIN
-  NEW.user_id := auth.uid();
-  IF NEW.user_id IS NULL THEN
-    RAISE EXCEPTION 'Authentication required to submit feedback.';
-  END IF;
-
-  SELECT full_name INTO NEW.author_name
-  FROM public.profiles
-  WHERE id = auth.uid();
-
-  NEW.author_name := COALESCE(NEW.author_name, 'Kisan Farmer');
-  NEW.updated_at := timezone('utc'::text, now());
-  RETURN NEW;
-END;
-$$;
-
--- Idempotent Trigger Creation: Feedback stamping
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger
-    WHERE tgname = 'trg_stamp_feedback_author'
+  IF to_regprocedure('public.fn_stamp_feedback_author_snapshot()') IS NULL THEN
+    EXECUTE $func$
+      CREATE FUNCTION public.fn_stamp_feedback_author_snapshot()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+      SET search_path = public, pg_temp
+      AS $body$
+      BEGIN
+        NEW.user_id := auth.uid();
+        IF NEW.user_id IS NULL THEN
+          RAISE EXCEPTION 'Authentication required to submit feedback.';
+        END IF;
+
+        SELECT full_name INTO NEW.author_name
+        FROM public.profiles
+        WHERE id = auth.uid();
+
+        NEW.author_name := COALESCE(NEW.author_name, 'Kisan Farmer');
+        NEW.updated_at := timezone('utc'::text, now());
+        RETURN NEW;
+      END;
+      $body$;
+    $func$;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF to_regclass('public.feedback') IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = to_regclass('public.feedback')
+      AND t.tgname = 'trg_stamp_feedback_author'
+      AND t.tgfoid = to_regproc('public.fn_stamp_feedback_author_snapshot')
+      AND NOT t.tgisinternal
   ) THEN
     EXECUTE 'CREATE TRIGGER trg_stamp_feedback_author
       BEFORE INSERT ON public.feedback
@@ -464,28 +894,37 @@ BEGIN
   END IF;
 END $$;
 
-CREATE OR REPLACE FUNCTION public.fn_protect_feedback_mutations()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-BEGIN
-  IF NEW.id <> OLD.id OR NEW.user_id <> OLD.user_id OR NEW.resource_id <> OLD.resource_id OR 
-     NEW.author_name <> OLD.author_name OR NEW.created_at <> OLD.created_at THEN
-    RAISE EXCEPTION 'Feedback author identity, resource association, and creation time are immutable.';
-  END IF;
-  NEW.updated_at := timezone('utc'::text, now());
-  RETURN NEW;
-END;
-$$;
-
--- Idempotent Trigger Creation: Feedback mutation protection
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger
-    WHERE tgname = 'trg_protect_feedback_mutations'
+  IF to_regprocedure('public.fn_protect_feedback_mutations()') IS NULL THEN
+    EXECUTE $func$
+      CREATE FUNCTION public.fn_protect_feedback_mutations()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+      SET search_path = public, pg_temp
+      AS $body$
+      BEGIN
+        IF NEW.id <> OLD.id OR NEW.user_id <> OLD.user_id OR NEW.resource_id <> OLD.resource_id OR 
+           NEW.author_name <> OLD.author_name OR NEW.created_at <> OLD.created_at THEN
+          RAISE EXCEPTION 'Feedback author identity, resource association, and creation time are immutable.';
+        END IF;
+        NEW.updated_at := timezone('utc'::text, now());
+        RETURN NEW;
+      END;
+      $body$;
+    $func$;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF to_regclass('public.feedback') IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = to_regclass('public.feedback')
+      AND t.tgname = 'trg_protect_feedback_mutations'
+      AND t.tgfoid = to_regproc('public.fn_protect_feedback_mutations')
+      AND NOT t.tgisinternal
   ) THEN
     EXECUTE 'CREATE TRIGGER trg_protect_feedback_mutations
       BEFORE UPDATE ON public.feedback
@@ -512,35 +951,44 @@ CREATE INDEX IF NOT EXISTS idx_posts_user ON public.community_posts (user_id);
 CREATE INDEX IF NOT EXISTS idx_posts_category ON public.community_posts (category);
 CREATE INDEX IF NOT EXISTS idx_posts_created_at ON public.community_posts (created_at DESC);
 
-CREATE OR REPLACE FUNCTION public.fn_stamp_post_author_snapshot()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-BEGIN
-  NEW.user_id := auth.uid();
-  IF NEW.user_id IS NULL THEN
-    RAISE EXCEPTION 'Authentication required to publish community posts.';
-  END IF;
-
-  SELECT full_name, state INTO NEW.author_name, NEW.author_state
-  FROM public.profiles
-  WHERE id = auth.uid();
-
-  NEW.author_name := COALESCE(NEW.author_name, 'Kisan Farmer');
-  NEW.author_state := COALESCE(NEW.author_state, 'General');
-  NEW.updated_at := timezone('utc'::text, now());
-  RETURN NEW;
-END;
-$$;
-
--- Idempotent Trigger Creation: Post author snapshot
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger
-    WHERE tgname = 'trg_stamp_post_author'
+  IF to_regprocedure('public.fn_stamp_post_author_snapshot()') IS NULL THEN
+    EXECUTE $func$
+      CREATE FUNCTION public.fn_stamp_post_author_snapshot()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+      SET search_path = public, pg_temp
+      AS $body$
+      BEGIN
+        NEW.user_id := auth.uid();
+        IF NEW.user_id IS NULL THEN
+          RAISE EXCEPTION 'Authentication required to publish community posts.';
+        END IF;
+
+        SELECT full_name, state INTO NEW.author_name, NEW.author_state
+        FROM public.profiles
+        WHERE id = auth.uid();
+
+        NEW.author_name := COALESCE(NEW.author_name, 'Kisan Farmer');
+        NEW.author_state := COALESCE(NEW.author_state, 'General');
+        NEW.updated_at := timezone('utc'::text, now());
+        RETURN NEW;
+      END;
+      $body$;
+    $func$;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF to_regclass('public.community_posts') IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = to_regclass('public.community_posts')
+      AND t.tgname = 'trg_stamp_post_author'
+      AND t.tgfoid = to_regproc('public.fn_stamp_post_author_snapshot')
+      AND NOT t.tgisinternal
   ) THEN
     EXECUTE 'CREATE TRIGGER trg_stamp_post_author
       BEFORE INSERT ON public.community_posts
@@ -549,27 +997,36 @@ BEGIN
   END IF;
 END $$;
 
-CREATE OR REPLACE FUNCTION public.fn_protect_post_mutations()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-BEGIN
-  IF NEW.user_id <> OLD.user_id OR NEW.author_name <> OLD.author_name OR NEW.author_state <> OLD.author_state THEN
-    RAISE EXCEPTION 'Author identity and post ownership cannot be altered.';
-  END IF;
-  NEW.updated_at := timezone('utc'::text, now());
-  RETURN NEW;
-END;
-$$;
-
--- Idempotent Trigger Creation: Post mutation protection
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger
-    WHERE tgname = 'trg_protect_post_mutations'
+  IF to_regprocedure('public.fn_protect_post_mutations()') IS NULL THEN
+    EXECUTE $func$
+      CREATE FUNCTION public.fn_protect_post_mutations()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+      SET search_path = public, pg_temp
+      AS $body$
+      BEGIN
+        IF NEW.user_id <> OLD.user_id OR NEW.author_name <> OLD.author_name OR NEW.author_state <> OLD.author_state THEN
+          RAISE EXCEPTION 'Author identity and post ownership cannot be altered.';
+        END IF;
+        NEW.updated_at := timezone('utc'::text, now());
+        RETURN NEW;
+      END;
+      $body$;
+    $func$;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF to_regclass('public.community_posts') IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = to_regclass('public.community_posts')
+      AND t.tgname = 'trg_protect_post_mutations'
+      AND t.tgfoid = to_regproc('public.fn_protect_post_mutations')
+      AND NOT t.tgisinternal
   ) THEN
     EXECUTE 'CREATE TRIGGER trg_protect_post_mutations
       BEFORE UPDATE ON public.community_posts
@@ -593,35 +1050,44 @@ CREATE TABLE IF NOT EXISTS public.comments (
 CREATE INDEX IF NOT EXISTS idx_comments_post ON public.comments (post_id);
 CREATE INDEX IF NOT EXISTS idx_comments_user ON public.comments (user_id);
 
-CREATE OR REPLACE FUNCTION public.fn_stamp_comment_author_snapshot()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-BEGIN
-  NEW.user_id := auth.uid();
-  IF NEW.user_id IS NULL THEN
-    RAISE EXCEPTION 'Authentication required to post comments.';
-  END IF;
-
-  SELECT full_name, state INTO NEW.comment_author, NEW.comment_state
-  FROM public.profiles
-  WHERE id = auth.uid();
-
-  NEW.comment_author := COALESCE(NEW.comment_author, 'Kisan Farmer');
-  NEW.comment_state := COALESCE(NEW.comment_state, 'General');
-  NEW.updated_at := timezone('utc'::text, now());
-  RETURN NEW;
-END;
-$$;
-
--- Idempotent Trigger Creation: Comment author snapshot
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger
-    WHERE tgname = 'trg_stamp_comment_author'
+  IF to_regprocedure('public.fn_stamp_comment_author_snapshot()') IS NULL THEN
+    EXECUTE $func$
+      CREATE FUNCTION public.fn_stamp_comment_author_snapshot()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+      SET search_path = public, pg_temp
+      AS $body$
+      BEGIN
+        NEW.user_id := auth.uid();
+        IF NEW.user_id IS NULL THEN
+          RAISE EXCEPTION 'Authentication required to post comments.';
+        END IF;
+
+        SELECT full_name, state INTO NEW.comment_author, NEW.comment_state
+        FROM public.profiles
+        WHERE id = auth.uid();
+
+        NEW.comment_author := COALESCE(NEW.comment_author, 'Kisan Farmer');
+        NEW.comment_state := COALESCE(NEW.comment_state, 'General');
+        NEW.updated_at := timezone('utc'::text, now());
+        RETURN NEW;
+      END;
+      $body$;
+    $func$;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF to_regclass('public.comments') IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = to_regclass('public.comments')
+      AND t.tgname = 'trg_stamp_comment_author'
+      AND t.tgfoid = to_regproc('public.fn_stamp_comment_author_snapshot')
+      AND NOT t.tgisinternal
   ) THEN
     EXECUTE 'CREATE TRIGGER trg_stamp_comment_author
       BEFORE INSERT ON public.comments
@@ -630,29 +1096,38 @@ BEGIN
   END IF;
 END $$;
 
-CREATE OR REPLACE FUNCTION public.fn_protect_comment_mutations()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-BEGIN
-  IF NEW.post_id <> OLD.post_id OR NEW.user_id <> OLD.user_id OR 
-     NEW.comment_author <> OLD.comment_author OR NEW.comment_state <> OLD.comment_state OR 
-     NEW.created_at <> OLD.created_at THEN
-    RAISE EXCEPTION 'Comment metadata, post association, and author identity are immutable.';
-  END IF;
-  NEW.updated_at := timezone('utc'::text, now());
-  RETURN NEW;
-END;
-$$;
-
--- Idempotent Trigger Creation: Comment mutation protection
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger
-    WHERE tgname = 'trg_protect_comment_mutations'
+  IF to_regprocedure('public.fn_protect_comment_mutations()') IS NULL THEN
+    EXECUTE $func$
+      CREATE FUNCTION public.fn_protect_comment_mutations()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+      SET search_path = public, pg_temp
+      AS $body$
+      BEGIN
+        IF NEW.post_id <> OLD.post_id OR NEW.user_id <> OLD.user_id OR 
+           NEW.comment_author <> OLD.comment_author OR NEW.comment_state <> OLD.comment_state OR 
+           NEW.created_at <> OLD.created_at THEN
+          RAISE EXCEPTION 'Comment metadata, post association, and author identity are immutable.';
+        END IF;
+        NEW.updated_at := timezone('utc'::text, now());
+        RETURN NEW;
+      END;
+      $body$;
+    $func$;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF to_regclass('public.comments') IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = to_regclass('public.comments')
+      AND t.tgname = 'trg_protect_comment_mutations'
+      AND t.tgfoid = to_regproc('public.fn_protect_comment_mutations')
+      AND NOT t.tgisinternal
   ) THEN
     EXECUTE 'CREATE TRIGGER trg_protect_comment_mutations
       BEFORE UPDATE ON public.comments
@@ -686,96 +1161,152 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON public.audit_logs (creat
 
 -- ----------------------------------------------------------------------------
 -- 4. PRIVACY-PRESERVING PUBLIC VIEWS (WITH SECURITY BARRIER)
--- Absolute zero raw user UUID exposure to external callers
+-- Non-destructive creation: Existing views are preserved, owned by postgres
 -- ----------------------------------------------------------------------------
-CREATE OR REPLACE VIEW public.v_community_posts
-WITH (security_barrier = true) AS
-SELECT
-  p.id,
-  p.author_name,
-  p.author_state,
-  p.title,
-  p.category,
-  p.content,
-  p.created_at,
-  p.updated_at,
-  COALESCE(l.like_count, 0)::integer AS like_count,
-  COALESCE(c.comment_count, 0)::integer AS comment_count,
-  (auth.uid() IS NOT NULL AND p.user_id = auth.uid()) AS is_author,
-  (auth.uid() IS NOT NULL AND EXISTS (
-    SELECT 1 FROM public.post_likes lk WHERE lk.post_id = p.id AND lk.user_id = auth.uid()
-  )) AS is_liked
-FROM public.community_posts p
-LEFT JOIN (
-  SELECT post_id, count(*)::integer AS like_count
-  FROM public.post_likes
-  GROUP BY post_id
-) l ON l.post_id = p.id
-LEFT JOIN (
-  SELECT post_id, count(*)::integer AS comment_count
-  FROM public.comments
-  GROUP BY post_id
-) c ON c.post_id = p.id;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.views
+    WHERE table_schema = 'public' AND table_name = 'v_community_posts'
+  ) THEN
+    EXECUTE $view$
+      CREATE VIEW public.v_community_posts
+      WITH (security_barrier = true) AS
+      SELECT
+        p.id,
+        p.author_name,
+        p.author_state,
+        p.title,
+        p.category,
+        p.content,
+        p.created_at,
+        p.updated_at,
+        COALESCE(l.like_count, 0)::integer AS like_count,
+        COALESCE(c.comment_count, 0)::integer AS comment_count,
+        (auth.uid() IS NOT NULL AND p.user_id = auth.uid()) AS is_author,
+        (auth.uid() IS NOT NULL AND EXISTS (
+          SELECT 1 FROM public.post_likes lk WHERE lk.post_id = p.id AND lk.user_id = auth.uid()
+        )) AS is_liked
+      FROM public.community_posts p
+      LEFT JOIN (
+        SELECT post_id, count(*)::integer AS like_count
+        FROM public.post_likes
+        GROUP BY post_id
+      ) l ON l.post_id = p.id
+      LEFT JOIN (
+        SELECT post_id, count(*)::integer AS comment_count
+        FROM public.comments
+        GROUP BY post_id
+      ) c ON c.post_id = p.id;
+    $view$;
+  END IF;
 
-CREATE OR REPLACE VIEW public.v_community_comments
-WITH (security_barrier = true) AS
-SELECT
-  c.id,
-  c.post_id,
-  c.comment_author,
-  c.comment_state,
-  c.comment,
-  c.created_at,
-  c.updated_at,
-  (auth.uid() IS NOT NULL AND c.user_id = auth.uid()) AS is_author
-FROM public.comments c;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.views
+    WHERE table_schema = 'public' AND table_name = 'v_community_comments'
+  ) THEN
+    EXECUTE $view$
+      CREATE VIEW public.v_community_comments
+      WITH (security_barrier = true) AS
+      SELECT
+        c.id,
+        c.post_id,
+        c.comment_author,
+        c.comment_state,
+        c.comment,
+        c.created_at,
+        c.updated_at,
+        (auth.uid() IS NOT NULL AND c.user_id = auth.uid()) AS is_author
+      FROM public.comments c;
+    $view$;
+  END IF;
 
-CREATE OR REPLACE VIEW public.v_resource_feedback
-WITH (security_barrier = true) AS
-SELECT
-  f.id,
-  f.resource_id,
-  f.author_name AS user_name,
-  f.rating,
-  f.comment,
-  f.created_at,
-  f.updated_at,
-  (auth.uid() IS NOT NULL AND f.user_id = auth.uid()) AS is_author
-FROM public.feedback f;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.views
+    WHERE table_schema = 'public' AND table_name = 'v_resource_feedback'
+  ) THEN
+    EXECUTE $view$
+      CREATE VIEW public.v_resource_feedback
+      WITH (security_barrier = true) AS
+      SELECT
+        f.id,
+        f.resource_id,
+        f.author_name AS user_name,
+        f.rating,
+        f.comment,
+        f.created_at,
+        f.updated_at,
+        (auth.uid() IS NOT NULL AND f.user_id = auth.uid()) AS is_author
+      FROM public.feedback f;
+    $view$;
+  END IF;
 
-CREATE OR REPLACE VIEW public.v_resource_ratings
-WITH (security_barrier = true) AS
-SELECT
-  resource_id,
-  round(avg(rating)::numeric, 1) AS avg_rating,
-  count(*)::integer AS review_count
-FROM public.feedback
-GROUP BY resource_id;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.views
+    WHERE table_schema = 'public' AND table_name = 'v_resource_ratings'
+  ) THEN
+    EXECUTE $view$
+      CREATE VIEW public.v_resource_ratings
+      WITH (security_barrier = true) AS
+      SELECT
+        resource_id,
+        round(avg(rating)::numeric, 1) AS avg_rating,
+        count(*)::integer AS review_count
+      FROM public.feedback
+      GROUP BY resource_id;
+    $view$;
+  END IF;
+END $$;
+
+-- Verify view ownership is postgres
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema = 'public' AND table_name = 'v_community_posts') THEN
+    ALTER VIEW public.v_community_posts OWNER TO postgres;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema = 'public' AND table_name = 'v_community_comments') THEN
+    ALTER VIEW public.v_community_comments OWNER TO postgres;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema = 'public' AND table_name = 'v_resource_feedback') THEN
+    ALTER VIEW public.v_resource_feedback OWNER TO postgres;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema = 'public' AND table_name = 'v_resource_ratings') THEN
+    ALTER VIEW public.v_resource_ratings OWNER TO postgres;
+  END IF;
+END $$;
 
 -- ----------------------------------------------------------------------------
 -- 5. RESOURCE VIEW INCREMENT FUNCTION (SERVICE ROLE ONLY)
+-- Created only if absent (Validated by exact signature)
 -- ----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public.fn_increment_resource_view(p_resource_id bigint)
-RETURNS integer
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-DECLARE
-  v_new_count integer;
+DO $$
 BEGIN
-  UPDATE public.resources
-  SET views_count = views_count + 1
-  WHERE id = p_resource_id
-  RETURNING views_count INTO v_new_count;
+  IF to_regprocedure('public.fn_increment_resource_view(bigint)') IS NULL THEN
+    EXECUTE $func$
+      CREATE FUNCTION public.fn_increment_resource_view(p_resource_id bigint)
+      RETURNS integer
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+      SET search_path = public, pg_temp
+      AS $body$
+      DECLARE
+        v_new_count integer;
+      BEGIN
+        UPDATE public.resources
+        SET views_count = views_count + 1
+        WHERE id = p_resource_id
+        RETURNING views_count INTO v_new_count;
 
-  RETURN COALESCE(v_new_count, 0);
-END;
-$$;
+        RETURN COALESCE(v_new_count, 0);
+      END;
+      $body$;
+    $func$;
+  END IF;
+END $$;
 
 -- ----------------------------------------------------------------------------
 -- 6. ROW LEVEL SECURITY (RLS) POLICIES
--- Idempotent, non-destructive policy configuration for all tables
+-- Idempotent, non-destructive policy configuration for all 9 tables + manifest
 -- ----------------------------------------------------------------------------
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.categories ENABLE ROW LEVEL SECURITY;
@@ -790,7 +1321,7 @@ ALTER TABLE public._kisan_migration_manifest ENABLE ROW LEVEL SECURITY;
 
 DO $$
 BEGIN
-  -- Profiles policies
+  -- 6.1 Profiles policies
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'profiles' AND policyname = 'profiles_select_own') THEN
     EXECUTE 'CREATE POLICY "profiles_select_own" ON public.profiles FOR SELECT TO authenticated USING (id = auth.uid())';
   END IF;
@@ -799,17 +1330,17 @@ BEGIN
     EXECUTE 'CREATE POLICY "profiles_update_own" ON public.profiles FOR UPDATE TO authenticated USING (id = auth.uid()) WITH CHECK (id = auth.uid())';
   END IF;
 
-  -- Categories policies
+  -- 6.2 Categories policies
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'categories' AND policyname = 'categories_read_public') THEN
     EXECUTE 'CREATE POLICY "categories_read_public" ON public.categories FOR SELECT TO anon, authenticated USING (true)';
   END IF;
 
-  -- Resources policies
+  -- 6.3 Resources policies
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'resources' AND policyname = 'resources_read_public') THEN
     EXECUTE 'CREATE POLICY "resources_read_public" ON public.resources FOR SELECT TO anon, authenticated USING (true)';
   END IF;
 
-  -- Bookmarks policies
+  -- 6.4 Bookmarks policies
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'bookmarks' AND policyname = 'bookmarks_select_own') THEN
     EXECUTE 'CREATE POLICY "bookmarks_select_own" ON public.bookmarks FOR SELECT TO authenticated USING (user_id = auth.uid())';
   END IF;
@@ -822,7 +1353,7 @@ BEGIN
     EXECUTE 'CREATE POLICY "bookmarks_delete_own" ON public.bookmarks FOR DELETE TO authenticated USING (user_id = auth.uid())';
   END IF;
 
-  -- Feedback policies
+  -- 6.5 Feedback policies
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'feedback' AND policyname = 'feedback_select_own') THEN
     EXECUTE 'CREATE POLICY "feedback_select_own" ON public.feedback FOR SELECT TO authenticated USING (user_id = auth.uid())';
   END IF;
@@ -839,7 +1370,7 @@ BEGIN
     EXECUTE 'CREATE POLICY "feedback_delete_own" ON public.feedback FOR DELETE TO authenticated USING (user_id = auth.uid())';
   END IF;
 
-  -- Community Posts policies
+  -- 6.6 Community Posts policies (Owner-based SELECT, INSERT, UPDATE, and DELETE)
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'community_posts' AND policyname = 'posts_select_own') THEN
     EXECUTE 'CREATE POLICY "posts_select_own" ON public.community_posts FOR SELECT TO authenticated USING (user_id = auth.uid())';
   END IF;
@@ -856,7 +1387,7 @@ BEGIN
     EXECUTE 'CREATE POLICY "posts_delete_own" ON public.community_posts FOR DELETE TO authenticated USING (user_id = auth.uid())';
   END IF;
 
-  -- Comments policies
+  -- 6.7 Comments policies
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'comments' AND policyname = 'comments_select_own') THEN
     EXECUTE 'CREATE POLICY "comments_select_own" ON public.comments FOR SELECT TO authenticated USING (user_id = auth.uid())';
   END IF;
@@ -873,7 +1404,7 @@ BEGIN
     EXECUTE 'CREATE POLICY "comments_delete_own" ON public.comments FOR DELETE TO authenticated USING (user_id = auth.uid())';
   END IF;
 
-  -- Post Likes policies
+  -- 6.8 Post Likes policies
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'post_likes' AND policyname = 'likes_select_own') THEN
     EXECUTE 'CREATE POLICY "likes_select_own" ON public.post_likes FOR SELECT TO authenticated USING (user_id = auth.uid())';
   END IF;
@@ -886,7 +1417,7 @@ BEGIN
     EXECUTE 'CREATE POLICY "likes_delete_own" ON public.post_likes FOR DELETE TO authenticated USING (user_id = auth.uid())';
   END IF;
 
-  -- Manifest policy: Access restricted to service role and database administrator
+  -- 6.9 Manifest policy: Access restricted to service role and database administrator
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = '_kisan_migration_manifest' AND policyname = 'manifest_admin_service_role_only') THEN
     EXECUTE 'CREATE POLICY "manifest_admin_service_role_only" ON public._kisan_migration_manifest FOR ALL TO service_role USING (true) WITH CHECK (true)';
   END IF;
@@ -914,17 +1445,40 @@ REVOKE ALL ON public.v_community_comments FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON public.v_resource_feedback FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON public.v_resource_ratings FROM PUBLIC, anon, authenticated;
 
--- 7.3 Specific Function Revocations
-REVOKE ALL ON FUNCTION public.fn_protect_profile_mutations() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.admin_set_user_role(uuid, text) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.fn_handle_new_auth_user() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.fn_stamp_feedback_author_snapshot() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.fn_protect_feedback_mutations() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.fn_stamp_post_author_snapshot() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.fn_protect_post_mutations() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.fn_stamp_comment_author_snapshot() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.fn_protect_comment_mutations() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.fn_increment_resource_view(bigint) FROM PUBLIC, anon, authenticated;
+-- 7.3 Specific Function Revocations (Validated by exact procedure signature)
+DO $$
+BEGIN
+  IF to_regprocedure('public.fn_protect_profile_mutations()') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION public.fn_protect_profile_mutations() FROM PUBLIC, anon, authenticated;
+  END IF;
+  IF to_regprocedure('public.admin_set_user_role(uuid, text)') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION public.admin_set_user_role(uuid, text) FROM PUBLIC, anon, authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_handle_new_auth_user()') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION public.fn_handle_new_auth_user() FROM PUBLIC, anon, authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_stamp_feedback_author_snapshot()') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION public.fn_stamp_feedback_author_snapshot() FROM PUBLIC, anon, authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_protect_feedback_mutations()') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION public.fn_protect_feedback_mutations() FROM PUBLIC, anon, authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_stamp_post_author_snapshot()') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION public.fn_stamp_post_author_snapshot() FROM PUBLIC, anon, authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_protect_post_mutations()') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION public.fn_protect_post_mutations() FROM PUBLIC, anon, authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_stamp_comment_author_snapshot()') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION public.fn_stamp_comment_author_snapshot() FROM PUBLIC, anon, authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_protect_comment_mutations()') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION public.fn_protect_comment_mutations() FROM PUBLIC, anon, authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_increment_resource_view(bigint)') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION public.fn_increment_resource_view(bigint) FROM PUBLIC, anon, authenticated;
+  END IF;
+END $$;
 
 -- 7.4 Specific Sequence Permissions (Safe dynamic check)
 DO $$
@@ -984,13 +1538,30 @@ GRANT SELECT ON public.v_resource_feedback TO authenticated;
 GRANT SELECT ON public.v_resource_ratings TO authenticated;
 
 -- Trigger functions execution permission for DML trigger evaluation
-GRANT EXECUTE ON FUNCTION public.fn_protect_profile_mutations() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.fn_stamp_feedback_author_snapshot() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.fn_protect_feedback_mutations() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.fn_stamp_post_author_snapshot() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.fn_protect_post_mutations() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.fn_stamp_comment_author_snapshot() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.fn_protect_comment_mutations() TO authenticated;
+DO $$
+BEGIN
+  IF to_regprocedure('public.fn_protect_profile_mutations()') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.fn_protect_profile_mutations() TO authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_stamp_feedback_author_snapshot()') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.fn_stamp_feedback_author_snapshot() TO authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_protect_feedback_mutations()') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.fn_protect_feedback_mutations() TO authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_stamp_post_author_snapshot()') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.fn_stamp_post_author_snapshot() TO authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_protect_post_mutations()') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.fn_protect_post_mutations() TO authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_stamp_comment_author_snapshot()') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.fn_stamp_comment_author_snapshot() TO authenticated;
+  END IF;
+  IF to_regprocedure('public.fn_protect_comment_mutations()') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.fn_protect_comment_mutations() TO authenticated;
+  END IF;
+END $$;
 
 -- 7.7 Trusted Database Administrator & Service Role Grants
 GRANT ALL PRIVILEGES ON public._kisan_migration_manifest TO postgres, service_role;
@@ -1010,9 +1581,18 @@ GRANT ALL PRIVILEGES ON public.v_resource_feedback TO postgres, service_role;
 GRANT ALL PRIVILEGES ON public.v_resource_ratings TO postgres, service_role;
 
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO postgres;
-GRANT EXECUTE ON FUNCTION public.fn_increment_resource_view(bigint) TO service_role;
-GRANT EXECUTE ON FUNCTION public.admin_set_user_role(uuid, text) TO service_role;
-GRANT EXECUTE ON FUNCTION public.fn_handle_new_auth_user() TO postgres, service_role;
+DO $$
+BEGIN
+  IF to_regprocedure('public.fn_increment_resource_view(bigint)') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.fn_increment_resource_view(bigint) TO service_role;
+  END IF;
+  IF to_regprocedure('public.admin_set_user_role(uuid, text)') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.admin_set_user_role(uuid, text) TO service_role;
+  END IF;
+  IF to_regprocedure('public.fn_handle_new_auth_user()') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.fn_handle_new_auth_user() TO postgres, service_role;
+  END IF;
+END $$;
 
 -- ----------------------------------------------------------------------------
 -- 8. RECORD OWNERSHIP IN MANIFEST

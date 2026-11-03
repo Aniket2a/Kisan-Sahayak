@@ -32,11 +32,17 @@ ON CONFLICT (id) DO UPDATE SET
   description = EXCLUDED.description,
   icon = EXCLUDED.icon;
 
--- Synchronize categories identity sequence to highest ID
-SELECT setval(
-  pg_get_serial_sequence('public.categories', 'id'),
-  COALESCE((SELECT max(id) FROM public.categories), 1)
-);
+-- Synchronize categories identity sequence to highest ID safely
+DO $$
+DECLARE
+  v_seq text;
+BEGIN
+  v_seq := pg_get_serial_sequence('public.categories', 'id');
+  IF v_seq IS NOT NULL THEN
+    PERFORM setval(v_seq, COALESCE((SELECT max(id) FROM public.categories), 1));
+  END IF;
+END $$;
+
 
 -- ----------------------------------------------------------------------------
 -- 2. SEED RESOURCES (39 Agricultural Resources Across 6 Core Types)
@@ -539,10 +545,16 @@ ON CONFLICT (id) DO UPDATE SET
   provider = EXCLUDED.provider,
   views_count = EXCLUDED.views_count;
 
--- Synchronize resources identity sequence to highest ID
-SELECT setval(
-  pg_get_serial_sequence('public.resources', 'id'),
-  COALESCE((SELECT max(id) FROM public.resources), 1)
-);
+-- Synchronize resources identity sequence to highest ID safely
+DO $$
+DECLARE
+  v_seq text;
+BEGIN
+  v_seq := pg_get_serial_sequence('public.resources', 'id');
+  IF v_seq IS NOT NULL THEN
+    PERFORM setval(v_seq, COALESCE((SELECT max(id) FROM public.resources), 1));
+  END IF;
+END $$;
+
 
 COMMIT;

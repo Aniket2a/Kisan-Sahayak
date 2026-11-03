@@ -1,5 +1,5 @@
 -- ============================================================================
--- KISAN SAHAYAK — STAGE 2 SAFE NON-DESTRUCTIVE ROLLBACK SCRIPT
+-- KISAN SAHAYAK — STAGE 2 SAFE NON-DESTRUCTIVE ROLLBACK SCRIPT (AUDITED)
 -- Migration: rollback_schema.sql
 -- Target Database: Supabase PostgreSQL 15+
 --
@@ -8,7 +8,7 @@
 --    actually CREATED vs REUSED during the migration.
 -- 2. Strictly REFUSES to drop any table, function, or view marked as REUSED or UNKNOWN.
 -- 3. Prior to removing any created table, ARCHIVES 100% of rows into
---    timestamped archive tables (arch_kisan_<table_name>_<ts>).
+--    timestamped, secured archive tables (arch_kisan_<table_name>_<ts>).
 -- 4. Asserts archive row count equals original row count before dropping.
 -- 5. Drops in strict leaf-to-root order WITHOUT CASCADE.
 -- 6. Fully wraps in a transaction with automatic rollback on error.
@@ -42,10 +42,7 @@ BEGIN
   RAISE NOTICE '>>> Initiating safe non-destructive rollback for Kisan Sahayak...';
 
   -- 1. Verify manifest existence and fetch migration record
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.tables 
-    WHERE table_schema = 'public' AND table_name = '_kisan_migration_manifest'
-  ) THEN
+  IF to_regclass('public._kisan_migration_manifest') IS NULL THEN
     RAISE EXCEPTION 'Rollback Abort: _kisan_migration_manifest does not exist. Cannot safely verify object ownership.';
   END IF;
 
@@ -64,43 +61,59 @@ BEGIN
 
   -- 2. Drop triggers that were created by this migration
   IF v_created ? 'trg_on_auth_user_created' THEN
-    DROP TRIGGER IF EXISTS trg_on_auth_user_created ON auth.users;
-    RAISE NOTICE 'Dropped trigger trg_on_auth_user_created';
+    IF to_regclass('auth.users') IS NOT NULL THEN
+      DROP TRIGGER IF EXISTS trg_on_auth_user_created ON auth.users;
+      RAISE NOTICE 'Dropped trigger trg_on_auth_user_created';
+    END IF;
   END IF;
 
   IF v_created ? 'trg_protect_profile_mutations' THEN
-    DROP TRIGGER IF EXISTS trg_protect_profile_mutations ON public.profiles;
-    RAISE NOTICE 'Dropped trigger trg_protect_profile_mutations';
+    IF to_regclass('public.profiles') IS NOT NULL THEN
+      DROP TRIGGER IF EXISTS trg_protect_profile_mutations ON public.profiles;
+      RAISE NOTICE 'Dropped trigger trg_protect_profile_mutations';
+    END IF;
   END IF;
 
   IF v_created ? 'trg_stamp_feedback_author' THEN
-    DROP TRIGGER IF EXISTS trg_stamp_feedback_author ON public.feedback;
-    RAISE NOTICE 'Dropped trigger trg_stamp_feedback_author';
+    IF to_regclass('public.feedback') IS NOT NULL THEN
+      DROP TRIGGER IF EXISTS trg_stamp_feedback_author ON public.feedback;
+      RAISE NOTICE 'Dropped trigger trg_stamp_feedback_author';
+    END IF;
   END IF;
 
   IF v_created ? 'trg_protect_feedback_mutations' THEN
-    DROP TRIGGER IF EXISTS trg_protect_feedback_mutations ON public.feedback;
-    RAISE NOTICE 'Dropped trigger trg_protect_feedback_mutations';
+    IF to_regclass('public.feedback') IS NOT NULL THEN
+      DROP TRIGGER IF EXISTS trg_protect_feedback_mutations ON public.feedback;
+      RAISE NOTICE 'Dropped trigger trg_protect_feedback_mutations';
+    END IF;
   END IF;
 
   IF v_created ? 'trg_stamp_post_author' THEN
-    DROP TRIGGER IF EXISTS trg_stamp_post_author ON public.community_posts;
-    RAISE NOTICE 'Dropped trigger trg_stamp_post_author';
+    IF to_regclass('public.community_posts') IS NOT NULL THEN
+      DROP TRIGGER IF EXISTS trg_stamp_post_author ON public.community_posts;
+      RAISE NOTICE 'Dropped trigger trg_stamp_post_author';
+    END IF;
   END IF;
 
   IF v_created ? 'trg_protect_post_mutations' THEN
-    DROP TRIGGER IF EXISTS trg_protect_post_mutations ON public.community_posts;
-    RAISE NOTICE 'Dropped trigger trg_protect_post_mutations';
+    IF to_regclass('public.community_posts') IS NOT NULL THEN
+      DROP TRIGGER IF EXISTS trg_protect_post_mutations ON public.community_posts;
+      RAISE NOTICE 'Dropped trigger trg_protect_post_mutations';
+    END IF;
   END IF;
 
   IF v_created ? 'trg_stamp_comment_author' THEN
-    DROP TRIGGER IF EXISTS trg_stamp_comment_author ON public.comments;
-    RAISE NOTICE 'Dropped trigger trg_stamp_comment_author';
+    IF to_regclass('public.comments') IS NOT NULL THEN
+      DROP TRIGGER IF EXISTS trg_stamp_comment_author ON public.comments;
+      RAISE NOTICE 'Dropped trigger trg_stamp_comment_author';
+    END IF;
   END IF;
 
   IF v_created ? 'trg_protect_comment_mutations' THEN
-    DROP TRIGGER IF EXISTS trg_protect_comment_mutations ON public.comments;
-    RAISE NOTICE 'Dropped trigger trg_protect_comment_mutations';
+    IF to_regclass('public.comments') IS NOT NULL THEN
+      DROP TRIGGER IF EXISTS trg_protect_comment_mutations ON public.comments;
+      RAISE NOTICE 'Dropped trigger trg_protect_comment_mutations';
+    END IF;
   END IF;
 
   -- 3. Drop Views (only if created by this migration)
@@ -124,7 +137,7 @@ BEGIN
     RAISE NOTICE 'Dropped view v_resource_ratings';
   END IF;
 
-  -- 4. Drop Functions (only if created by this migration)
+  -- 4. Drop Functions (only if created by this migration, using exact signatures)
   IF v_created ? 'fn_protect_profile_mutations' THEN
     DROP FUNCTION IF EXISTS public.fn_protect_profile_mutations();
     RAISE NOTICE 'Dropped function fn_protect_profile_mutations';
@@ -180,16 +193,18 @@ BEGIN
     -- Only act if this table was actually created by our migration
     IF v_created ? v_tbl THEN
       -- Check table exists in public schema
-      IF EXISTS (
-        SELECT 1 FROM information_schema.tables 
-        WHERE table_schema = 'public' AND table_name = v_tbl
-      ) THEN
+      IF to_regclass('public.' || v_tbl) IS NOT NULL THEN
         v_arch_name := 'arch_kisan_' || v_tbl || '_' || v_ts;
         
         -- A. Create verified archive table with complete copy
         EXECUTE format('CREATE TABLE public.%I AS SELECT * FROM public.%I', v_arch_name, v_tbl);
         
-        -- B. Verify row count parity between live and archive
+        -- B. Secure the archive table immediately
+        EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', v_arch_name);
+        EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC, anon, authenticated', v_arch_name);
+        EXECUTE format('GRANT ALL ON TABLE public.%I TO postgres, service_role', v_arch_name);
+
+        -- C. Verify row count parity between live and archive
         EXECUTE format('SELECT count(*) FROM public.%I', v_tbl) INTO v_orig_count;
         EXECUTE format('SELECT count(*) FROM public.%I', v_arch_name) INTO v_arch_count;
 
@@ -200,7 +215,7 @@ BEGIN
 
         RAISE NOTICE 'Safely archived % rows from % to %', v_orig_count, v_tbl, v_arch_name;
 
-        -- C. Drop table strictly without CASCADE
+        -- D. Drop table strictly without CASCADE
         EXECUTE format('DROP TABLE public.%I', v_tbl);
         RAISE NOTICE 'Safely dropped table %', v_tbl;
       END IF;
