@@ -11,10 +11,15 @@ export default async (request: Request): Promise<Response> => {
   const url = new URL(request.url);
   const rawBody = Buffer.from(await request.arrayBuffer());
 
+  const headers: Record<string, string> = {};
+  request.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+
   const event = {
     httpMethod: request.method,
     path: url.pathname,
-    headers: Object.fromEntries(request.headers.entries()),
+    headers,
     multiValueHeaders: {},
     queryStringParameters: Object.fromEntries(url.searchParams.entries()),
     multiValueQueryStringParameters: {},
