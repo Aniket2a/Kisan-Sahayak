@@ -346,7 +346,6 @@ BEGIN
   END IF;
 
   -- Validate all trigger functions have signature (), prosecdef = true, prorettype = trigger
-  DO $chk$
   DECLARE
     v_fn text;
     v_fns text[] := ARRAY[
@@ -370,7 +369,7 @@ BEGIN
         END IF;
       END IF;
     END LOOP;
-  END $chk$;
+  END;
 
   -- 0.5 Validate existing triggers reference expected trigger functions and relations
   IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_profile_mutations' AND tgrelid <> to_regclass('public.profiles') AND NOT tgisinternal) THEN
@@ -1583,15 +1582,21 @@ BEGIN
   END IF;
 END $$;
 
--- 7.4 Specific Sequence Permissions (Safe dynamic check)
+-- 7.4 Specific Sequence Permissions (Safe dynamic check across all application sequences)
 DO $$
 DECLARE
   v_seq text;
   v_seqs text[] := ARRAY[
-    'categories_id_seq', 'resources_id_seq', 'feedback_id_seq',
-    'community_posts_id_seq', 'comments_id_seq'
+    'categories_id_seq',
+    'resources_id_seq',
+    'feedback_id_seq',
+    'community_posts_id_seq',
+    'comments_id_seq',
+    'post_likes_id_seq',
+    'bookmarks_id_seq'
   ];
 BEGIN
+  -- 1. Explicit identity and serial sequences
   FOREACH v_seq IN ARRAY v_seqs LOOP
     IF EXISTS (
       SELECT 1 FROM pg_class c
@@ -1600,9 +1605,26 @@ BEGIN
     ) THEN
       EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM PUBLIC, anon, authenticated;', v_seq);
       EXECUTE format('GRANT ALL PRIVILEGES ON SEQUENCE public.%I TO postgres, service_role;', v_seq);
-      IF v_seq IN ('feedback_id_seq', 'community_posts_id_seq', 'comments_id_seq') THEN
+      IF v_seq IN ('feedback_id_seq', 'community_posts_id_seq', 'comments_id_seq', 'post_likes_id_seq', 'bookmarks_id_seq') THEN
         EXECUTE format('GRANT USAGE ON SEQUENCE public.%I TO authenticated;', v_seq);
       END IF;
+    END IF;
+  END LOOP;
+
+  -- 2. Dynamically discover and protect any additional sequence associated with application tables
+  FOR v_seq IN
+    SELECT c.relname
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_depend d ON d.objid = c.oid
+    JOIN pg_class t ON t.oid = d.refobjid
+    WHERE n.nspname = 'public' AND c.relkind = 'S'
+      AND t.relname IN ('categories', 'resources', 'feedback', 'community_posts', 'comments', 'post_likes', 'bookmarks', 'profiles', 'audit_logs')
+  LOOP
+    EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM PUBLIC, anon, authenticated;', v_seq);
+    EXECUTE format('GRANT ALL PRIVILEGES ON SEQUENCE public.%I TO postgres, service_role;', v_seq);
+    IF v_seq LIKE '%feedback%' OR v_seq LIKE '%post%' OR v_seq LIKE '%comment%' OR v_seq LIKE '%like%' OR v_seq LIKE '%bookmark%' THEN
+      EXECUTE format('GRANT USAGE ON SEQUENCE public.%I TO authenticated;', v_seq);
     END IF;
   END LOOP;
 END $$;
@@ -1725,6 +1747,7 @@ BEGIN
     'sequences', COALESCE((SELECT jsonb_agg(obj_name) FROM _kisan_inventory WHERE obj_type = 'sequence' AND pre_existed), '[]'::jsonb)
   ) INTO v_pre_existing_def;
 
+  -- On repeated execution, preserve the original ownership snapshot so rollback remains strictly accurate
   INSERT INTO public._kisan_migration_manifest (
     migration_id, created_objects, reused_objects, unknown_objects, pre_existing_definitions
   ) VALUES (
@@ -1736,10 +1759,10 @@ BEGIN
   )
   ON CONFLICT (migration_id) DO UPDATE SET
     applied_at = timezone('utc'::text, now()),
-    applied_by = current_user,
-    created_objects = EXCLUDED.created_objects,
-    reused_objects = EXCLUDED.reused_objects,
-    pre_existing_definitions = EXCLUDED.pre_existing_definitions;
+    applied_by = current_user;
+    -- Intentionally preserving original created_objects, reused_objects & pre_existing_definitions!
+
+  RAISE NOTICE '>>> Migration manifest recorded successfully. Original ownership snapshot preserved.';
 END $$;
 
 COMMIT;

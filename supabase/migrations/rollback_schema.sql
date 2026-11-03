@@ -4,14 +4,15 @@
 -- Target Database: Supabase PostgreSQL 15+
 --
 -- Safety Guarantees:
--- 1. Consults public._kisan_migration_manifest to identify which objects were
---    actually CREATED vs REUSED during the migration.
--- 2. Strictly REFUSES to drop any table, function, or view marked as REUSED or UNKNOWN.
+-- 1. Consults public._kisan_migration_manifest to retrieve the original,
+--    immutable ownership snapshot (created_objects vs reused_objects).
+-- 2. Strictly REFUSES to drop any table, function, view, policy, or index marked
+--    as REUSED or not explicitly present in created_objects.
 -- 3. Prior to removing any created table, ARCHIVES 100% of rows into
 --    timestamped, secured archive tables (arch_kisan_<table_name>_<ts>).
--- 4. Asserts archive row count equals original row count before dropping.
+-- 4. Asserts archive table physical existence and row count parity before dropping.
 -- 5. Drops in strict leaf-to-root order WITHOUT CASCADE.
--- 6. Fully wraps in a transaction with automatic rollback on error.
+-- 6. Fully wrapped in a single transaction with automatic rollback on error.
 -- ============================================================================
 
 BEGIN;
@@ -27,6 +28,44 @@ DECLARE
   v_orig_count bigint;
   v_arch_count bigint;
   v_tbl text;
+  v_pol_item text[];
+  v_idx text;
+  v_policies text[][] := ARRAY[
+    ARRAY['profiles', 'profiles_select_own'],
+    ARRAY['profiles', 'profiles_update_own'],
+    ARRAY['categories', 'categories_read_public'],
+    ARRAY['resources', 'resources_read_public'],
+    ARRAY['bookmarks', 'bookmarks_select_own'],
+    ARRAY['bookmarks', 'bookmarks_insert_own'],
+    ARRAY['bookmarks', 'bookmarks_delete_own'],
+    ARRAY['feedback', 'feedback_select_own'],
+    ARRAY['feedback', 'feedback_insert_own'],
+    ARRAY['feedback', 'feedback_update_own'],
+    ARRAY['feedback', 'feedback_delete_own'],
+    ARRAY['community_posts', 'posts_select_own'],
+    ARRAY['community_posts', 'posts_insert_own'],
+    ARRAY['community_posts', 'posts_update_own'],
+    ARRAY['community_posts', 'posts_delete_own'],
+    ARRAY['comments', 'comments_select_own'],
+    ARRAY['comments', 'comments_insert_own'],
+    ARRAY['comments', 'comments_update_own'],
+    ARRAY['comments', 'comments_delete_own'],
+    ARRAY['post_likes', 'likes_select_own'],
+    ARRAY['post_likes', 'likes_insert_own'],
+    ARRAY['post_likes', 'likes_delete_own'],
+    ARRAY['_kisan_migration_manifest', 'manifest_admin_service_role_only']
+  ];
+  v_indexes text[] := ARRAY[
+    'idx_profiles_username_lower', 'idx_profiles_state',
+    'idx_categories_slug',
+    'idx_resources_category', 'idx_resources_type',
+    'idx_bookmarks_user_res',
+    'idx_feedback_resource', 'idx_feedback_user',
+    'idx_posts_user', 'idx_posts_category',
+    'idx_comments_post', 'idx_comments_user',
+    'idx_post_likes_user',
+    'idx_audit_logs_action', 'idx_audit_logs_created'
+  ];
   v_drop_order text[] := ARRAY[
     'post_likes',
     'comments',
@@ -41,7 +80,7 @@ DECLARE
 BEGIN
   RAISE NOTICE '>>> Initiating safe non-destructive rollback for Kisan Sahayak...';
 
-  -- 1. Verify manifest existence and fetch migration record
+  -- 1. Verify manifest existence and fetch original migration snapshot
   IF to_regclass('public._kisan_migration_manifest') IS NULL THEN
     RAISE EXCEPTION 'Rollback Abort: _kisan_migration_manifest does not exist. Cannot safely verify object ownership.';
   END IF;
@@ -57,202 +96,165 @@ BEGIN
   v_created := v_manifest.created_objects;
   v_reused := v_manifest.reused_objects;
 
-  RAISE NOTICE '>>> Manifest verified. Created objects: %, Reused objects: %', v_created, v_reused;
+  IF v_created IS NULL OR jsonb_typeof(v_created) <> 'array' THEN
+    RAISE EXCEPTION 'Rollback Abort: created_objects in manifest is invalid or corrupt.';
+  END IF;
 
-  -- 2. Drop triggers that were created by this migration
-  IF v_created ? 'trg_on_auth_user_created' THEN
+  IF v_reused IS NULL OR jsonb_typeof(v_reused) <> 'array' THEN
+    RAISE EXCEPTION 'Rollback Abort: reused_objects in manifest is invalid or corrupt.';
+  END IF;
+
+  RAISE NOTICE '>>> Original manifest snapshot verified. Created: %, Reused: %', v_created, v_reused;
+
+  -- 2. Drop triggers created by this migration (never drop if marked as reused)
+  IF (v_created ? 'trg_on_auth_user_created') AND NOT (v_reused ? 'trg_on_auth_user_created') THEN
     IF to_regclass('auth.users') IS NOT NULL THEN
       DROP TRIGGER IF EXISTS trg_on_auth_user_created ON auth.users;
       RAISE NOTICE 'Dropped trigger trg_on_auth_user_created';
     END IF;
   END IF;
 
-  IF v_created ? 'trg_protect_profile_mutations' THEN
+  IF (v_created ? 'trg_protect_profile_mutations') AND NOT (v_reused ? 'trg_protect_profile_mutations') THEN
     IF to_regclass('public.profiles') IS NOT NULL THEN
       DROP TRIGGER IF EXISTS trg_protect_profile_mutations ON public.profiles;
       RAISE NOTICE 'Dropped trigger trg_protect_profile_mutations';
     END IF;
   END IF;
 
-  IF v_created ? 'trg_stamp_feedback_author' THEN
+  IF (v_created ? 'trg_stamp_feedback_author') AND NOT (v_reused ? 'trg_stamp_feedback_author') THEN
     IF to_regclass('public.feedback') IS NOT NULL THEN
       DROP TRIGGER IF EXISTS trg_stamp_feedback_author ON public.feedback;
       RAISE NOTICE 'Dropped trigger trg_stamp_feedback_author';
     END IF;
   END IF;
 
-  IF v_created ? 'trg_protect_feedback_mutations' THEN
+  IF (v_created ? 'trg_protect_feedback_mutations') AND NOT (v_reused ? 'trg_protect_feedback_mutations') THEN
     IF to_regclass('public.feedback') IS NOT NULL THEN
       DROP TRIGGER IF EXISTS trg_protect_feedback_mutations ON public.feedback;
       RAISE NOTICE 'Dropped trigger trg_protect_feedback_mutations';
     END IF;
   END IF;
 
-  IF v_created ? 'trg_stamp_post_author' THEN
+  IF (v_created ? 'trg_stamp_post_author') AND NOT (v_reused ? 'trg_stamp_post_author') THEN
     IF to_regclass('public.community_posts') IS NOT NULL THEN
       DROP TRIGGER IF EXISTS trg_stamp_post_author ON public.community_posts;
       RAISE NOTICE 'Dropped trigger trg_stamp_post_author';
     END IF;
   END IF;
 
-  IF v_created ? 'trg_protect_post_mutations' THEN
+  IF (v_created ? 'trg_protect_post_mutations') AND NOT (v_reused ? 'trg_protect_post_mutations') THEN
     IF to_regclass('public.community_posts') IS NOT NULL THEN
       DROP TRIGGER IF EXISTS trg_protect_post_mutations ON public.community_posts;
       RAISE NOTICE 'Dropped trigger trg_protect_post_mutations';
     END IF;
   END IF;
 
-  IF v_created ? 'trg_stamp_comment_author' THEN
+  IF (v_created ? 'trg_stamp_comment_author') AND NOT (v_reused ? 'trg_stamp_comment_author') THEN
     IF to_regclass('public.comments') IS NOT NULL THEN
       DROP TRIGGER IF EXISTS trg_stamp_comment_author ON public.comments;
       RAISE NOTICE 'Dropped trigger trg_stamp_comment_author';
     END IF;
   END IF;
 
-  IF v_created ? 'trg_protect_comment_mutations' THEN
+  IF (v_created ? 'trg_protect_comment_mutations') AND NOT (v_reused ? 'trg_protect_comment_mutations') THEN
     IF to_regclass('public.comments') IS NOT NULL THEN
       DROP TRIGGER IF EXISTS trg_protect_comment_mutations ON public.comments;
       RAISE NOTICE 'Dropped trigger trg_protect_comment_mutations';
     END IF;
   END IF;
 
-  -- 3. Drop Views (only if created by this migration)
-  IF v_created ? 'v_community_comments' THEN
+  -- 3. Drop Views (only if created by this migration and not pre-existing)
+  IF (v_created ? 'v_community_comments') AND NOT (v_reused ? 'v_community_comments') THEN
     DROP VIEW IF EXISTS public.v_community_comments;
     RAISE NOTICE 'Dropped view v_community_comments';
   END IF;
 
-  IF v_created ? 'v_community_posts' THEN
+  IF (v_created ? 'v_community_posts') AND NOT (v_reused ? 'v_community_posts') THEN
     DROP VIEW IF EXISTS public.v_community_posts;
     RAISE NOTICE 'Dropped view v_community_posts';
   END IF;
 
-  IF v_created ? 'v_resource_feedback' THEN
+  IF (v_created ? 'v_resource_feedback') AND NOT (v_reused ? 'v_resource_feedback') THEN
     DROP VIEW IF EXISTS public.v_resource_feedback;
     RAISE NOTICE 'Dropped view v_resource_feedback';
   END IF;
 
-  IF v_created ? 'v_resource_ratings' THEN
+  IF (v_created ? 'v_resource_ratings') AND NOT (v_reused ? 'v_resource_ratings') THEN
     DROP VIEW IF EXISTS public.v_resource_ratings;
     RAISE NOTICE 'Dropped view v_resource_ratings';
   END IF;
 
-  -- 4. Drop Functions (only if created by this migration, using exact signatures)
-  IF v_created ? 'fn_protect_profile_mutations' THEN
+  -- 4. Drop Functions (only if created by this migration and not pre-existing, using exact signatures)
+  IF (v_created ? 'fn_protect_profile_mutations') AND NOT (v_reused ? 'fn_protect_profile_mutations') THEN
     DROP FUNCTION IF EXISTS public.fn_protect_profile_mutations();
     RAISE NOTICE 'Dropped function fn_protect_profile_mutations';
   END IF;
 
-  IF v_created ? 'admin_set_user_role' THEN
+  IF (v_created ? 'admin_set_user_role') AND NOT (v_reused ? 'admin_set_user_role') THEN
     DROP FUNCTION IF EXISTS public.admin_set_user_role(uuid, text);
     RAISE NOTICE 'Dropped function admin_set_user_role';
   END IF;
 
-  IF v_created ? 'fn_handle_new_auth_user' THEN
+  IF (v_created ? 'fn_handle_new_auth_user') AND NOT (v_reused ? 'fn_handle_new_auth_user') THEN
     DROP FUNCTION IF EXISTS public.fn_handle_new_auth_user();
     RAISE NOTICE 'Dropped function fn_handle_new_auth_user';
   END IF;
 
-  IF v_created ? 'fn_stamp_feedback_author_snapshot' THEN
+  IF (v_created ? 'fn_stamp_feedback_author_snapshot') AND NOT (v_reused ? 'fn_stamp_feedback_author_snapshot') THEN
     DROP FUNCTION IF EXISTS public.fn_stamp_feedback_author_snapshot();
     RAISE NOTICE 'Dropped function fn_stamp_feedback_author_snapshot';
   END IF;
 
-  IF v_created ? 'fn_protect_feedback_mutations' THEN
+  IF (v_created ? 'fn_protect_feedback_mutations') AND NOT (v_reused ? 'fn_protect_feedback_mutations') THEN
     DROP FUNCTION IF EXISTS public.fn_protect_feedback_mutations();
     RAISE NOTICE 'Dropped function fn_protect_feedback_mutations';
   END IF;
 
-  IF v_created ? 'fn_stamp_post_author_snapshot' THEN
+  IF (v_created ? 'fn_stamp_post_author_snapshot') AND NOT (v_reused ? 'fn_stamp_post_author_snapshot') THEN
     DROP FUNCTION IF EXISTS public.fn_stamp_post_author_snapshot();
     RAISE NOTICE 'Dropped function fn_stamp_post_author_snapshot';
   END IF;
 
-  IF v_created ? 'fn_protect_post_mutations' THEN
+  IF (v_created ? 'fn_protect_post_mutations') AND NOT (v_reused ? 'fn_protect_post_mutations') THEN
     DROP FUNCTION IF EXISTS public.fn_protect_post_mutations();
     RAISE NOTICE 'Dropped function fn_protect_post_mutations';
   END IF;
 
-  IF v_created ? 'fn_stamp_comment_author_snapshot' THEN
+  IF (v_created ? 'fn_stamp_comment_author_snapshot') AND NOT (v_reused ? 'fn_stamp_comment_author_snapshot') THEN
     DROP FUNCTION IF EXISTS public.fn_stamp_comment_author_snapshot();
     RAISE NOTICE 'Dropped function fn_stamp_comment_author_snapshot';
   END IF;
 
-  IF v_created ? 'fn_protect_comment_mutations' THEN
+  IF (v_created ? 'fn_protect_comment_mutations') AND NOT (v_reused ? 'fn_protect_comment_mutations') THEN
     DROP FUNCTION IF EXISTS public.fn_protect_comment_mutations();
     RAISE NOTICE 'Dropped function fn_protect_comment_mutations';
   END IF;
 
-  IF v_created ? 'fn_increment_resource_view' THEN
+  IF (v_created ? 'fn_increment_resource_view') AND NOT (v_reused ? 'fn_increment_resource_view') THEN
     DROP FUNCTION IF EXISTS public.fn_increment_resource_view(bigint);
     RAISE NOTICE 'Dropped function fn_increment_resource_view';
   END IF;
 
-  -- 5. Drop Policies created by this migration (if relation still exists)
-  DECLARE
-    v_pol_item text[];
-    v_policies text[][] := ARRAY[
-      ARRAY['profiles', 'profiles_select_own'],
-      ARRAY['profiles', 'profiles_update_own'],
-      ARRAY['categories', 'categories_read_public'],
-      ARRAY['resources', 'resources_read_public'],
-      ARRAY['bookmarks', 'bookmarks_select_own'],
-      ARRAY['bookmarks', 'bookmarks_insert_own'],
-      ARRAY['bookmarks', 'bookmarks_delete_own'],
-      ARRAY['feedback', 'feedback_select_own'],
-      ARRAY['feedback', 'feedback_insert_own'],
-      ARRAY['feedback', 'feedback_update_own'],
-      ARRAY['feedback', 'feedback_delete_own'],
-      ARRAY['community_posts', 'posts_select_own'],
-      ARRAY['community_posts', 'posts_insert_own'],
-      ARRAY['community_posts', 'posts_update_own'],
-      ARRAY['community_posts', 'posts_delete_own'],
-      ARRAY['comments', 'comments_select_own'],
-      ARRAY['comments', 'comments_insert_own'],
-      ARRAY['comments', 'comments_update_own'],
-      ARRAY['comments', 'comments_delete_own'],
-      ARRAY['post_likes', 'likes_select_own'],
-      ARRAY['post_likes', 'likes_insert_own'],
-      ARRAY['post_likes', 'likes_delete_own'],
-      ARRAY['_kisan_migration_manifest', 'manifest_admin_service_role_only']
-    ];
-  BEGIN
-    FOREACH v_pol_item SLICE 1 IN ARRAY v_policies LOOP
-      IF v_created ? v_pol_item[2] AND to_regclass('public.' || v_pol_item[1]) IS NOT NULL THEN
-        EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', v_pol_item[2], v_pol_item[1]);
-        RAISE NOTICE 'Dropped policy % on %', v_pol_item[2], v_pol_item[1];
-      END IF;
-    END LOOP;
-  END;
+  -- 5. Drop Policies created by this migration (if relation still exists and not pre-existing)
+  FOREACH v_pol_item SLICE 1 IN ARRAY v_policies LOOP
+    IF (v_created ? v_pol_item[2]) AND NOT (v_reused ? v_pol_item[2]) AND to_regclass('public.' || v_pol_item[1]) IS NOT NULL THEN
+      EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', v_pol_item[2], v_pol_item[1]);
+      RAISE NOTICE 'Dropped policy % on %', v_pol_item[2], v_pol_item[1];
+    END IF;
+  END LOOP;
 
-  -- 6. Drop Indexes created by this migration (if relation still exists)
-  DECLARE
-    v_idx text;
-    v_indexes text[] := ARRAY[
-      'idx_profiles_username_lower', 'idx_profiles_state',
-      'idx_categories_slug',
-      'idx_resources_category', 'idx_resources_type',
-      'idx_bookmarks_user_res',
-      'idx_feedback_resource', 'idx_feedback_user',
-      'idx_posts_user', 'idx_posts_category',
-      'idx_comments_post', 'idx_comments_user',
-      'idx_post_likes_user',
-      'idx_audit_logs_action', 'idx_audit_logs_created'
-    ];
-  BEGIN
-    FOREACH v_idx IN ARRAY v_indexes LOOP
-      IF v_created ? v_idx AND to_regclass('public.' || v_idx) IS NOT NULL THEN
-        EXECUTE format('DROP INDEX IF EXISTS public.%I', v_idx);
-        RAISE NOTICE 'Dropped index %', v_idx;
-      END IF;
-    END LOOP;
-  END;
+  -- 6. Drop Indexes created by this migration (if relation still exists and not pre-existing)
+  FOREACH v_idx IN ARRAY v_indexes LOOP
+    IF (v_created ? v_idx) AND NOT (v_reused ? v_idx) AND to_regclass('public.' || v_idx) IS NOT NULL THEN
+      EXECUTE format('DROP INDEX IF EXISTS public.%I', v_idx);
+      RAISE NOTICE 'Dropped index %', v_idx;
+    END IF;
+  END LOOP;
 
   -- 7. Safe Archive & Removal of Tables (Leaf to Root, No CASCADE)
   FOREACH v_tbl IN ARRAY v_drop_order LOOP
-    -- Only act if this table was actually created by our migration
-    IF v_created ? v_tbl THEN
-      -- Check table exists in public schema
+    -- Only act if this table was actually created by our migration and was not pre-existing
+    IF (v_created ? v_tbl) AND NOT (v_reused ? v_tbl) THEN
       IF to_regclass('public.' || v_tbl) IS NOT NULL THEN
         v_arch_name := 'arch_kisan_' || v_tbl || '_' || v_ts;
         
