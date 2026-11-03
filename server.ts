@@ -320,6 +320,7 @@ async function startServer() {
     res.json({
       valid: true,
       role: 'admin',
+      id: user.authUserId || 'admin_root',
       username: user.username
     });
   });
