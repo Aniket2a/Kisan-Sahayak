@@ -171,6 +171,7 @@ async function startServer() {
 
   // 2. Secure one-time Admin Setup (only works if unconfigured)
   app.post('/api/admin/setup', (req: Request, res: Response) => {
+    if (process.env.NODE_ENV === 'production') return res.status(403).json({ success: false, error: 'Runtime admin setup is disabled in production. Use the trusted setup script and deployment environment variables.' });
     const { username: existingUser, hash: existingHash } = getEnvConfig();
     if (existingUser && existingHash) {
       return res.status(403).json({
@@ -362,6 +363,7 @@ async function startServer() {
   app.patch('/api/admin/users/:id/role', authenticateAdminToken, asyncAdmin(async (req, res) => {
     const targetId = String(req.params.id || '');
     const role = req.body?.role;
+    if ((req as any).adminUser?.authUserId === targetId) return res.status(403).json({ error: 'You cannot change your own administrator role.' });
     if (!/^[0-9a-f-]{36}$/i.test(targetId) || !['admin', 'user'].includes(role)) {
       return res.status(400).json({ error: 'A valid user ID and role are required.' });
     }
@@ -383,6 +385,7 @@ async function startServer() {
   app.delete('/api/admin/users/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
     const targetId = String(req.params.id || '');
     if (!/^[0-9a-f-]{36}$/i.test(targetId)) return res.status(400).json({ error: 'A valid user ID is required.' });
+    if ((req as any).adminUser?.authUserId === targetId) return res.status(403).json({ error: 'You cannot delete your own administrator account.' });
     const client = getAdminSupabase();
     const { data: target, error: lookupError } = await client.from('profiles').select('id, role').eq('id', targetId).maybeSingle();
     if (lookupError) return res.status(502).json({ error: lookupError.message });
