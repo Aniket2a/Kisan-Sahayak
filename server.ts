@@ -157,6 +157,19 @@ async function startServer() {
     return payload;
   };
 
+  const recordAdminAudit = async (client: SupabaseClient, req: Request, action: string, targetType: string, targetId: string | number, details: Record<string, any> = {}) => {
+    const admin = (req as any).adminUser || {};
+    const { error } = await client.from('audit_logs').insert({
+      action,
+      performed_by: admin.authUserId || null,
+      target_type: targetType,
+      target_id: String(targetId),
+      details,
+      ip_address: req.ip || null
+    });
+    if (error) console.warn('[Admin audit] Could not record action:', action, error.message);
+  };
+
   const adminLoginAttempts = new Map<string, { count: number; resetAt: number }>();
   const loginAttemptKey = (req: Request, _username: string) => String(req.ip || req.socket.remoteAddress || 'unknown');
 
@@ -401,6 +414,7 @@ async function startServer() {
     }
     const { error } = await client.auth.admin.deleteUser(targetId);
     if (error) return res.status(502).json({ error: error.message });
+    await recordAdminAudit(client, req, 'USER_DELETED', 'auth_user', targetId);
     return res.json({ success: true, id: targetId });
   }));
 
@@ -411,6 +425,7 @@ async function startServer() {
     const { data, error } = await client.from('community_posts').delete().eq('id', id).select('id').maybeSingle();
     if (error) return res.status(502).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Community post was not found.' });
+    await recordAdminAudit(client, req, 'COMMUNITY_POST_DELETED', 'community_post', id);
     return res.json({ success: true, id });
   }));
 
@@ -421,6 +436,7 @@ async function startServer() {
     const { data, error } = await client.from('feedback').delete().eq('id', id).select('id').maybeSingle();
     if (error) return res.status(502).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Feedback was not found.' });
+    await recordAdminAudit(client, req, 'FEEDBACK_DELETED', 'feedback', id);
     return res.json({ success: true, id });
   }));
 
@@ -431,6 +447,7 @@ async function startServer() {
     const client = getAdminSupabase();
     const { data, error } = await client.from('resources').insert(payload).select('*').single();
     if (error) return res.status(502).json({ error: error.message });
+    await recordAdminAudit(client, req, 'RESOURCE_CREATED', 'resource', data.id, { title: data.title });
     return res.status(201).json({ resource: data });
   }));
 
@@ -444,6 +461,7 @@ async function startServer() {
     const { data, error } = await client.from('resources').update(payload).eq('id', id).select('*').maybeSingle();
     if (error) return res.status(502).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Resource was not found.' });
+    await recordAdminAudit(client, req, 'RESOURCE_UPDATED', 'resource', id, { fields: Object.keys(payload) });
     return res.json({ resource: data });
   }));
 
@@ -454,6 +472,7 @@ async function startServer() {
     const { data, error } = await client.from('resources').delete().eq('id', id).select('id').maybeSingle();
     if (error) return res.status(502).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Resource was not found.' });
+    await recordAdminAudit(client, req, 'RESOURCE_DELETED', 'resource', id);
     return res.json({ success: true, id });
   }));
 
