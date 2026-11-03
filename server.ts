@@ -83,22 +83,31 @@ async function startServer() {
   app.use(express.json({ limit: '1mb' }));
 
   // Middleware to authenticate Admin token
-  const authenticateAdminToken = (req: Request, res: Response, next: NextFunction) => {
+  const authenticateAdminToken = async (req: Request, res: Response, next: NextFunction) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ valid: false, error: 'Authentication token required' });
     }
-
     const token = authHeader.split(' ')[1];
     const { secret, username } = getEnvConfig();
-
+    if (!secret || secret.length < 32) return res.status(503).json({ valid: false, error: 'Admin session signing is not configured securely.' });
     try {
-      const decoded = jwt.verify(token, secret) as { role: string; username: string };
-      if (decoded && decoded.role === 'admin' && decoded.username.toLowerCase() === username.toLowerCase()) {
+      const decoded = jwt.verify(token, secret) as { role: string; username: string; authUserId?: string };
+      if (!decoded || decoded.role !== 'admin') return res.status(403).json({ valid: false, error: 'Admin role verification failed' });
+      const isRootAdmin = Boolean(username && decoded.username && decoded.username.toLowerCase() === username.toLowerCase() && !decoded.authUserId);
+      if (isRootAdmin) {
         (req as any).adminUser = decoded;
         return next();
       }
-      return res.status(403).json({ valid: false, error: 'Admin role verification failed' });
+      if (decoded.authUserId) {
+        const client = getAdminSupabase();
+        const { data: profile, error } = await client.from('profiles').select('id, role').eq('id', decoded.authUserId).maybeSingle();
+        if (!error && profile?.role === 'admin') {
+          (req as any).adminUser = decoded;
+          return next();
+        }
+      }
+      return res.status(403).json({ valid: false, error: 'Admin role verification failed or has been revoked.' });
     } catch (err) {
       return res.status(401).json({ valid: false, error: 'Invalid or expired session token' });
     }
