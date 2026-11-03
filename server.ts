@@ -382,6 +382,26 @@ async function startServer() {
     return res.json({ success: true, id: targetId });
   }));
 
+  app.delete('/api/admin/community/posts/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'A valid post ID is required.' });
+    const client = getAdminSupabase();
+    const { data, error } = await client.from('community_posts').delete().eq('id', id).select('id').maybeSingle();
+    if (error) return res.status(502).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Community post was not found.' });
+    return res.json({ success: true, id });
+  }));
+
+  app.delete('/api/admin/feedback/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'A valid feedback ID is required.' });
+    const client = getAdminSupabase();
+    const { data, error } = await client.from('feedback').delete().eq('id', id).select('id').maybeSingle();
+    if (error) return res.status(502).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Feedback was not found.' });
+    return res.json({ success: true, id });
+  }));
+
   app.post('/api/admin/resources', authenticateAdminToken, asyncAdmin(async (req, res) => {
     let payload: Record<string, any>;
     try { payload = cleanResourcePayload(req.body); }
