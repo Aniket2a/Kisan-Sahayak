@@ -272,6 +272,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { ...payload.user, id: String(payload.user.id), role: 'admin' as UserRole };
   };
   const fetchAdminUsers = async () => {
+    setUsers([]);
     const payload = await adminRequest('/api/admin/users');
     setUsers(Array.isArray(payload.users) ? payload.users : []);
   };
