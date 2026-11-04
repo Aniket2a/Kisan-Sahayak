@@ -78,8 +78,9 @@ export const LoginPage: React.FC = () => {
               type="text"
               value={usernameOrEmail}
               onChange={(e) => setUsernameOrEmail(e.target.value)}
-              placeholder="demo_farmer_1 / demo.farmer1@example.com"
+              placeholder="farmer@example.com or username"
               required
+              autoComplete="username"
               style={{
                 width: '100%',
                 padding: '0.65rem 0.85rem',
@@ -116,6 +117,8 @@ export const LoginPage: React.FC = () => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
+              required
+              autoComplete="current-password"
               style={{
                 width: '100%',
                 padding: '0.65rem 0.85rem',
@@ -143,36 +146,6 @@ export const LoginPage: React.FC = () => {
             )}
           </button>
         </form>
-
-        <div style={{ marginTop: '1.25rem', padding: '0.85rem', background: '#f8fafc', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-light)', fontSize: '0.82rem' }}>
-          <div style={{ fontWeight: 700, marginBottom: '0.5rem', color: 'var(--forest-dark)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <i className="fa-solid fa-key" style={{ color: 'var(--primary-green)' }}></i> Demo Quick Login
-          </div>
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className="btn btn-outline"
-              style={{ fontSize: '0.78rem', padding: '0.35rem 0.65rem' }}
-              onClick={() => {
-                setUsernameOrEmail('demo_farmer_1');
-                setPassword('farmer123');
-              }}
-            >
-              <i className="fa-solid fa-user"></i> Demo Farmer
-            </button>
-            <button
-              type="button"
-              className="btn btn-outline"
-              style={{ fontSize: '0.78rem', padding: '0.35rem 0.65rem' }}
-              onClick={() => {
-                setUsernameOrEmail('admin');
-                setPassword('admin123');
-              }}
-            >
-              <i className="fa-solid fa-shield-halved"></i> Admin Portal
-            </button>
-          </div>
-        </div>
 
         <div style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
           {t('login_no_account')}{' '}

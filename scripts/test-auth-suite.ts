@@ -151,6 +151,45 @@ async function runTestSuite() {
       assert.strictEqual(data.resolved, false);
     });
 
+    // 8b. Privacy protection against email enumeration
+    await test('POST /api/auth/resolve-identifier does not leak emails for non-demo unknown username', async () => {
+      const res = await fetch(`${baseUrl}/api/auth/resolve-identifier`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: 'unknown_farmer_account_xyz' })
+      });
+      assert.strictEqual(res.status, 404);
+      const data = await res.json();
+      assert.strictEqual(data.resolved, false);
+    });
+
+    // 8c. Farmer login endpoint validation
+    await test('POST /api/auth/farmer-login rejects missing identifier or password', async () => {
+      const res = await fetch(`${baseUrl}/api/auth/farmer-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: '' })
+      });
+      assert.strictEqual(res.status, 400);
+      const data = await res.json();
+      assert.strictEqual(data.success, false);
+    });
+
+    // 8d. Protected admin endpoints reject unauthenticated access with 401
+    await test('DELETE /api/admin/community/posts/1 rejects request without admin token with 401', async () => {
+      const res = await fetch(`${baseUrl}/api/admin/community/posts/1`, {
+        method: 'DELETE'
+      });
+      assert.strictEqual(res.status, 401);
+    });
+
+    await test('DELETE /api/admin/community/comments/1 rejects request without admin token with 401', async () => {
+      const res = await fetch(`${baseUrl}/api/admin/community/comments/1`, {
+        method: 'DELETE'
+      });
+      assert.strictEqual(res.status, 401);
+    });
+
     // 9. Netlify Function handler simulation
     await test('Netlify Function handler handles OPTIONS preflight', async () => {
       const event = {

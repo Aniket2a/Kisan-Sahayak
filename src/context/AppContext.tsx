@@ -94,11 +94,15 @@ interface AppContextType {
   deleteResource: (id: number) => Promise<boolean>;
 
   // Community
-  createPost: (title: string, category: string, content: string) => void;
+  isCommunityLoading: boolean;
+  communityError: string | null;
+  refreshCommunity: () => Promise<void>;
+  createPost: (title: string, category: string, content: string) => Promise<boolean>;
   deletePost: (postId: number) => Promise<void>;
-  toggleLike: (postId: number) => void;
+  toggleLike: (postId: number) => Promise<void> | void;
   isPostLiked: (postId: number) => boolean;
-  addComment: (postId: number, commentText: string) => void;
+  addComment: (postId: number, commentText: string) => Promise<boolean>;
+  deleteComment: (commentId: number, postId: number) => Promise<void>;
 
   // User Management (Admin)
   toggleUserRole: (userId: string | number) => Promise<void>;
@@ -131,23 +135,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Users list for admin view and stats
   const [users, setUsers] = useState<User[]>(INITIAL_USERS);
 
-  // Current authenticated user (Restored from session or localStorage cache)
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const savedUser = localStorage.getItem('kisan_current_user');
-    if (savedUser) {
-      try {
-        const parsed = JSON.parse(savedUser);
-        if (parsed && parsed.role === 'admin') {
-          const token = sessionStorage.getItem('kisan_admin_token');
-          if (!token) return null;
-        }
-        return parsed && parsed.id ? { ...parsed, id: String(parsed.id) } : null;
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  });
+  // Current authenticated user (Restored exclusively from active Supabase or verified Admin token session)
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   const [resources, setResources] = useState<Resource[]>(() => {
     const saved = localStorage.getItem('kisan_resources');
@@ -158,35 +147,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isResourcesLoading, setIsResourcesLoading] = useState<boolean>(true);
   const [resourcesError, setResourcesError] = useState<string | null>(null);
 
-  const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => {
-    const saved = localStorage.getItem('kisan_bookmarks');
-    return saved ? JSON.parse(saved) : INITIAL_BOOKMARKS;
-  });
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [isBookmarksLoading, setIsBookmarksLoading] = useState<boolean>(false);
   const [bookmarksError, setBookmarksError] = useState<string | null>(null);
 
-  const [feedback, setFeedback] = useState<Feedback[]>(() => {
-    const saved = localStorage.getItem('kisan_feedback');
-    return saved ? JSON.parse(saved) : INITIAL_FEEDBACK;
-  });
+  const [feedback, setFeedback] = useState<Feedback[]>(INITIAL_FEEDBACK);
   const [isFeedbackLoading, setIsFeedbackLoading] = useState<boolean>(false);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [ratingsFromDb, setRatingsFromDb] = useState<Record<number, { avg: number; count: number }>>({});
 
-  const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>(() => {
-    const saved = localStorage.getItem('kisan_posts');
-    return saved ? JSON.parse(saved) : INITIAL_COMMUNITY_POSTS;
-  });
+  const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>(INITIAL_COMMUNITY_POSTS);
+  const [isCommunityLoading, setIsCommunityLoading] = useState<boolean>(false);
+  const [communityError, setCommunityError] = useState<string | null>(null);
 
-  const [comments, setComments] = useState<Comment[]>(() => {
-    const saved = localStorage.getItem('kisan_comments');
-    return saved ? JSON.parse(saved) : INITIAL_COMMENTS;
-  });
-
-  const [likes, setLikes] = useState<Array<{ postId: number; userId: string | number }>>(() => {
-    const saved = localStorage.getItem('kisan_likes');
-    return saved ? JSON.parse(saved) : INITIAL_LIKES;
-  });
+  const [comments, setComments] = useState<Comment[]>(INITIAL_COMMENTS);
+  const [likes, setLikes] = useState<Array<{ postId: number; userId: string | number }>>([]);
 
   // Routing
   const [currentRoute, setCurrentRoute] = useState<string>(() => {
@@ -513,6 +488,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await fetchResources(loadedCats);
         await fetchFeedback();
         await fetchRatings();
+        await refreshCommunity();
       }
     }
 
@@ -692,47 +668,160 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Synchronize bookmarks and feedback whenever logged-in user changes
+  // Community data fetchers backed by Supabase
+  const fetchCommunityPosts = async (): Promise<void> => {
+    if (!isSupabaseConfigured()) {
+      setCommunityPosts(INITIAL_COMMUNITY_POSTS);
+      return;
+    }
+    setIsCommunityLoading(true);
+    setCommunityError(null);
+    try {
+      const { data, error } = await supabase
+        .from('v_community_posts')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        // Fallback: try raw community_posts table
+        const { data: rawData, error: rawError } = await supabase
+          .from('community_posts')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (rawError) {
+          console.warn('Could not load community posts:', rawError.message);
+          setCommunityError(rawError.message);
+          setCommunityPosts(INITIAL_COMMUNITY_POSTS);
+        } else if (rawData && rawData.length > 0) {
+          const mapped: CommunityPost[] = rawData.map(p => ({
+            id: Number(p.id),
+            user_id: p.user_id,
+            author_name: p.author_name || 'Kisan Farmer',
+            author_state: p.author_state || 'General',
+            title: p.title,
+            category: p.category,
+            content: p.content,
+            created_at: p.created_at,
+            like_count: 0,
+            comment_count: 0
+          }));
+          setCommunityPosts(mapped);
+        } else {
+          setCommunityPosts(INITIAL_COMMUNITY_POSTS);
+        }
+      } else if (data && data.length > 0) {
+        const mapped: CommunityPost[] = data.map(p => ({
+          id: Number(p.id),
+          user_id: p.user_id || undefined,
+          author_name: p.author_name || 'Kisan Farmer',
+          author_state: p.author_state || 'General',
+          title: p.title,
+          category: p.category,
+          content: p.content,
+          created_at: p.created_at,
+          like_count: Number(p.like_count || 0),
+          comment_count: Number(p.comment_count || 0),
+          is_author: Boolean(p.is_author),
+          is_liked: Boolean(p.is_liked)
+        }));
+        setCommunityPosts(mapped);
+      } else {
+        setCommunityPosts(INITIAL_COMMUNITY_POSTS);
+      }
+    } catch (err: any) {
+      console.warn('Error fetching community posts:', err);
+      setCommunityError(err?.message || 'Failed to load community discussions');
+      setCommunityPosts(INITIAL_COMMUNITY_POSTS);
+    } finally {
+      setIsCommunityLoading(false);
+    }
+  };
+
+  const fetchComments = async (): Promise<void> => {
+    if (!isSupabaseConfigured()) {
+      setComments(INITIAL_COMMENTS);
+      return;
+    }
+    try {
+      const { data, error } = await supabase
+        .from('v_community_comments')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        const { data: rawData, error: rawError } = await supabase
+          .from('comments')
+          .select('*')
+          .order('created_at', { ascending: true });
+
+        if (!rawError && rawData) {
+          setComments(rawData.map(c => ({
+            id: Number(c.id),
+            post_id: Number(c.post_id),
+            user_id: c.user_id,
+            comment_author: c.comment_author || 'Kisan Farmer',
+            comment_state: c.comment_state || '',
+            comment: c.comment,
+            created_at: c.created_at
+          })));
+        }
+      } else if (data) {
+        setComments(data.map(c => ({
+          id: Number(c.id),
+          post_id: Number(c.post_id),
+          user_id: c.user_id || undefined,
+          comment_author: c.comment_author || 'Kisan Farmer',
+          comment_state: c.comment_state || '',
+          comment: c.comment,
+          created_at: c.created_at,
+          is_author: Boolean(c.is_author)
+        })));
+      }
+    } catch (err) {
+      console.warn('Error fetching comments:', err);
+    }
+  };
+
+  const fetchLikes = async (): Promise<void> => {
+    if (!isSupabaseConfigured()) {
+      setLikes([]);
+      return;
+    }
+    try {
+      const { data, error } = await supabase
+        .from('post_likes')
+        .select('post_id, user_id');
+
+      if (!error && data) {
+        setLikes(data.map(l => ({
+          postId: Number(l.post_id),
+          userId: l.user_id
+        })));
+      }
+    } catch (err) {
+      console.warn('Error fetching post likes:', err);
+    }
+  };
+
+  const refreshCommunity = async (): Promise<void> => {
+    await Promise.all([fetchCommunityPosts(), fetchComments(), fetchLikes()]);
+  };
+
+  // Synchronize bookmarks, feedback, ratings and community whenever logged-in user changes
   useEffect(() => {
     if (currentUser && isValidUuid(currentUser.id)) {
       fetchBookmarks(currentUser);
     }
     fetchFeedback();
     fetchRatings();
+    fetchCommunityPosts();
+    fetchLikes();
   }, [currentUser?.id]);
-
-  // Save sanitized current user to localStorage (never store passwords!)
-  useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('kisan_current_user', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('kisan_current_user');
-    }
-  }, [currentUser]);
 
   useEffect(() => {
     localStorage.setItem('kisan_resources', JSON.stringify(resources));
   }, [resources]);
-
-  useEffect(() => {
-    localStorage.setItem('kisan_bookmarks', JSON.stringify(bookmarks));
-  }, [bookmarks]);
-
-  useEffect(() => {
-    localStorage.setItem('kisan_feedback', JSON.stringify(feedback));
-  }, [feedback]);
-
-  useEffect(() => {
-    localStorage.setItem('kisan_posts', JSON.stringify(communityPosts));
-  }, [communityPosts]);
-
-  useEffect(() => {
-    localStorage.setItem('kisan_comments', JSON.stringify(comments));
-  }, [comments]);
-
-  useEffect(() => {
-    localStorage.setItem('kisan_likes', JSON.stringify(likes));
-  }, [likes]);
 
   // Handle window hash changes
   useEffect(() => {
@@ -1155,40 +1244,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Backend request error - proceed to farmer auth
     }
 
-    // 2. Farmer authentication via Supabase Auth or offline demo farmer
+    // 2. Farmer authentication via Supabase Auth
     if (!isSupabaseConfigured()) {
-      const demoMap: Record<string, string> = {
-        'demo_farmer_1': 'demo.farmer1@example.com',
-        'demo_farmer_2': 'demo.farmer2@example.com',
-        'demo_farmer_3': 'demo.farmer3@example.com'
+      return {
+        success: false,
+        message: 'Supabase authentication is not configured in the environment. Please configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to log in.'
       };
-      const foundUser = users.find(u =>
-        u.username.toLowerCase() === normalized ||
-        u.email.toLowerCase() === normalized ||
-        (demoMap[normalized] && u.email.toLowerCase() === demoMap[normalized])
-      );
-      if (foundUser) {
-        sessionStorage.removeItem('kisan_admin_token');
-        setCurrentUser(foundUser);
-        localStorage.setItem('kisan_current_user', JSON.stringify(foundUser));
-        showToast(`${t('auth_welcome_back')}, ${foundUser.full_name}!`, 'success');
-        return { success: true, message: t('auth_login_success'), role: 'user' };
-      }
-      const mockFarmer: User = {
-        id: `00000000-0000-0000-0000-${String(Date.now()).slice(-12).padStart(12, '0')}`,
-        full_name: trimmedInput,
-        username: normalized.replace(/[^a-z0-9_]/g, '_') || 'farmer',
-        email: normalized.includes('@') ? normalized : `${normalized}@example.com`,
-        state: 'Punjab',
-        preferred_category: 'Seeds & Crops',
-        role: 'user',
-        created_at: new Date().toISOString()
-      };
-      sessionStorage.removeItem('kisan_admin_token');
-      setCurrentUser(mockFarmer);
-      localStorage.setItem('kisan_current_user', JSON.stringify(mockFarmer));
-      showToast(`${t('auth_welcome_back')}, ${mockFarmer.full_name}!`, 'success');
-      return { success: true, message: t('auth_login_success'), role: 'user' };
     }
 
     if (!password) {
@@ -1198,72 +1259,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    // Resolve email address: Supabase Auth requires an email
-    let emailToUse = normalized;
-    const demoMap: Record<string, string> = {
-      'demo_farmer_1': 'demo.farmer1@example.com',
-      'demo_farmer_2': 'demo.farmer2@example.com',
-      'demo_farmer_3': 'demo.farmer3@example.com'
-    };
-
-    if (demoMap[normalized]) {
-      emailToUse = demoMap[normalized];
-    } else if (!normalized.includes('@')) {
-      // User entered a username. Query server endpoint to resolve username to email securely.
+    // Direct email authentication
+    if (trimmedInput.includes('@')) {
       try {
-        const res = await fetch('/api/auth/resolve-identifier', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ identifier: normalized })
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: normalized,
+          password
         });
-        const resJson = await res.json().catch(() => ({}));
-        if (res.ok && resJson.email) {
-          emailToUse = resJson.email;
-        } else {
-          return {
-            success: false,
-            message: resJson.error || 'No farmer account found with this username. Please enter your registered email address.'
-          };
+
+        if (error) {
+          if (error.message.toLowerCase().includes('invalid login credentials')) {
+            return {
+              success: false,
+              message: 'Invalid credentials. Please verify your email and password, or register a new farmer account.'
+            };
+          }
+          if (error.message.toLowerCase().includes('email not confirmed')) {
+            return {
+              success: false,
+              message: 'Please confirm your email address before logging in, or check your inbox for the verification link.'
+            };
+          }
+          return { success: false, message: error.message };
         }
-      } catch {
+
+        if (!data.user) {
+          return { success: false, message: t('auth_invalid_creds') };
+        }
+
+        sessionStorage.removeItem('kisan_admin_token');
+        const mappedUser = await mapSupabaseUserToUser(data.user);
+        const promotedAdmin = mappedUser.role === 'admin' && data.session?.access_token
+          ? await exchangeSupabaseAdminSession(data.session.access_token)
+          : null;
+        const signedInUser = promotedAdmin || { ...mappedUser, role: 'user' as UserRole };
+        setCurrentUser(signedInUser);
+        if (promotedAdmin) {
+          try { await fetchAdminUsers(); } catch (error: any) { showToast(error.message || 'Could not load users.', 'danger'); }
+        }
+        showToast(`${t('auth_welcome_back')}, ${signedInUser.full_name}!`, 'success');
+        return { success: true, message: t('auth_login_success'), role: signedInUser.role };
+      } catch (err: any) {
         return {
           success: false,
-          message: 'Please enter your registered email address (e.g. farmer@example.com) to log in.'
+          message: err?.message || 'Authentication error. Please check your network connection.'
         };
       }
     }
 
+    // Username login: authenticate securely server-side without leaking registered emails
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: emailToUse,
-        password
+      const res = await fetch('/api/auth/farmer-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: trimmedInput, password })
+      });
+      const resJson = await res.json().catch(() => ({}));
+
+      if (!res.ok || !resJson.success || !resJson.session) {
+        return {
+          success: false,
+          message: resJson.message || 'Invalid credentials. Please check your username and password.'
+        };
+      }
+
+      await supabase.auth.setSession({
+        access_token: resJson.session.access_token,
+        refresh_token: resJson.session.refresh_token
       });
 
-      if (error) {
-        if (error.message.toLowerCase().includes('invalid login credentials')) {
-          return {
-            success: false,
-            message: 'Invalid credentials. Please verify your email and password, or register a new farmer account.'
-          };
-        }
-        if (error.message.toLowerCase().includes('email not confirmed')) {
-          return {
-            success: false,
-            message: 'Please confirm your email address before logging in, or check your inbox for the verification link.'
-          };
-        }
-        return { success: false, message: error.message };
-      }
-
-      if (!data.user) {
-        return { success: false, message: t('auth_invalid_creds') };
-      }
-
-      // Farmers are strictly non-admin
       sessionStorage.removeItem('kisan_admin_token');
-      const mappedUser = await mapSupabaseUserToUser(data.user);
-      const promotedAdmin = mappedUser.role === 'admin' && data.session?.access_token
-        ? await exchangeSupabaseAdminSession(data.session.access_token)
+      const mappedUser = await mapSupabaseUserToUser(resJson.user);
+      const promotedAdmin = mappedUser.role === 'admin' && resJson.session.access_token
+        ? await exchangeSupabaseAdminSession(resJson.session.access_token)
         : null;
       const signedInUser = promotedAdmin || { ...mappedUser, role: 'user' as UserRole };
       setCurrentUser(signedInUser);
@@ -1308,21 +1376,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (!isSupabaseConfigured()) {
-      const newUser: User = {
-        id: `00000000-0000-0000-0000-${String(Date.now()).slice(-12).padStart(12, '0')}`,
-        full_name: userData.full_name.trim(),
-        username: cleanUsername,
-        email: uemail,
-        state: userData.state || 'General',
-        preferred_category: userData.preferred_category || 'General',
-        role: 'user',
-        created_at: new Date().toISOString()
+      return {
+        success: false,
+        message: 'Supabase authentication is not configured in the environment. Please configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to register a farmer account.'
       };
-      setUsers(prev => [...prev, newUser]);
-      setCurrentUser(newUser);
-      localStorage.setItem('kisan_current_user', JSON.stringify(newUser));
-      showToast(t('auth_registered_success'), 'success');
-      return { success: true, emailConfirmationRequired: false, message: t('auth_registered_success') };
+    }
+
+    // Check for duplicate username in profiles before signup
+    try {
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('id')
+        .ilike('username', cleanUsername)
+        .maybeSingle();
+
+      if (existingProfile) {
+        return { success: false, message: 'This username is already taken. Please choose another username.' };
+      }
+    } catch {
+      // profiles query may fail if Stage 2 migration pending, proceed to auth signup
     }
 
     try {
@@ -1335,7 +1407,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             username: cleanUsername,
             state: userData.state || 'General',
             preferred_category: userData.preferred_category || 'General',
-            role: 'user' // Strictly farmer role, never admin
+            role: 'user'
           }
         }
       });
@@ -1351,7 +1423,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, message: 'Registration failed. Please try again.' };
       }
 
-      // Defensive creation in public.profiles (if Stage 2 trigger is not active)
+      // Defensive creation in public.profiles (if Stage 2 trigger is pending)
       try {
         await supabase.from('profiles').insert({
           id: data.user.id,
@@ -1396,8 +1468,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (!isSupabaseConfigured()) {
-      showToast('Demo Mode: Password reset link simulated for ' + cleanEmail, 'info');
-      return { success: true, message: 'A password reset link has been simulated for your email.' };
+      return {
+        success: false,
+        message: 'Supabase authentication is not configured in the environment. Please configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY for password recovery.'
+      };
     }
 
     try {
@@ -1423,9 +1497,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (!isSupabaseConfigured()) {
-      showToast('Password updated successfully (Demo Mode).', 'success');
-      setIsPasswordRecovery(false);
-      return { success: true, message: 'Password updated successfully.' };
+      return {
+        success: false,
+        message: 'Supabase authentication is not configured in the environment. Cannot update password.'
+      };
     }
 
     try {
@@ -1448,6 +1523,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Auth: Logout flow
   const logout = async (): Promise<void> => {
     sessionStorage.removeItem('kisan_admin_token');
+    localStorage.removeItem('kisan_current_user');
+    localStorage.removeItem('kisan_bookmarks');
+
     if (currentUser?.role === 'admin') {
       fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     }
@@ -1460,6 +1538,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
+    setBookmarks([]);
     setCurrentUser(null);
     showToast(t('auth_logout_msg'), 'info');
     navigate('/');
@@ -1605,22 +1684,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     catch (error: any) { showToast(error.message || 'Resource deletion failed.', 'danger'); return false; }
   };
-  // Community
-  const createPost = (title: string, category: string, content: string) => {
+  // Community Forum Actions backed by Supabase
+  const createPost = async (title: string, category: string, content: string): Promise<boolean> => {
     if (!currentUser) {
       showToast('Please log in to post a question.', 'warning');
       navigate('/login');
-      return;
+      return false;
     }
 
+    const cleanTitle = title.trim();
+    const cleanContent = content.trim();
+    if (cleanTitle.length < 5) {
+      showToast('Question title must be at least 5 characters.', 'warning');
+      return false;
+    }
+    if (cleanContent.length < 10) {
+      showToast('Question content must be at least 10 characters.', 'warning');
+      return false;
+    }
+
+    const tempId = Date.now();
     const newPost: CommunityPost = {
-      id: Date.now(),
+      id: tempId,
       user_id: currentUser.id,
       author_name: currentUser.full_name,
       author_state: currentUser.state,
-      title: title.trim(),
+      title: cleanTitle,
       category: category.trim(),
-      content: content.trim(),
+      content: cleanContent,
       created_at: new Date().toISOString(),
       like_count: 0,
       comment_count: 0
@@ -1628,21 +1719,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setCommunityPosts(prev => [newPost, ...prev]);
     showToast('Your question has been posted to the farmer community!', 'success');
+
+    if (isSupabaseConfigured() && isValidUuid(currentUser.id)) {
+      try {
+        const { data, error } = await supabase
+          .from('community_posts')
+          .insert({
+            user_id: currentUser.id,
+            author_name: currentUser.full_name,
+            author_state: currentUser.state,
+            title: cleanTitle,
+            category: category.trim(),
+            content: cleanContent
+          })
+          .select('id, created_at')
+          .single();
+
+        if (error) {
+          console.warn('Could not persist post to Supabase:', error.message);
+        } else if (data) {
+          setCommunityPosts(prev =>
+            prev.map(p => (p.id === tempId ? { ...p, id: Number(data.id), created_at: data.created_at } : p))
+          );
+        }
+      } catch (err: any) {
+        console.warn('Post creation error:', err);
+      }
+    }
+    return true;
   };
 
   const deletePost = async (postId: number): Promise<void> => {
-    if (!currentUser || currentUser.role !== 'admin') {
-      showToast('Administrator access is required to moderate community posts.', 'danger');
+    if (!currentUser) {
+      showToast('Please log in to delete discussions.', 'warning');
       return;
     }
-    try {
-      await adminRequest('/api/admin/community/posts/' + postId, { method: 'DELETE' });
-      setCommunityPosts(prev => prev.filter(p => p.id !== postId));
-      setComments(prev => prev.filter(comment => comment.post_id !== postId));
-      setLikes(prev => prev.filter(like => like.postId !== postId));
-      showToast('Post deleted successfully.', 'success');
-    } catch (error: any) {
-      showToast(error.message || 'Could not delete post.', 'danger');
+
+    if (currentUser.role === 'admin') {
+      try {
+        await adminRequest('/api/admin/community/posts/' + postId, { method: 'DELETE' });
+        setCommunityPosts(prev => prev.filter(p => p.id !== postId));
+        setComments(prev => prev.filter(comment => comment.post_id !== postId));
+        setLikes(prev => prev.filter(like => like.postId !== postId));
+        showToast('Post deleted successfully.', 'success');
+      } catch (error: any) {
+        showToast(error.message || 'Could not delete post.', 'danger');
+      }
+      return;
+    }
+
+    // Farmer post author
+    setCommunityPosts(prev => prev.filter(p => p.id !== postId));
+    setComments(prev => prev.filter(comment => comment.post_id !== postId));
+    setLikes(prev => prev.filter(like => like.postId !== postId));
+    showToast('Post deleted.', 'info');
+
+    if (isSupabaseConfigured() && isValidUuid(currentUser.id)) {
+      try {
+        const { error } = await supabase
+          .from('community_posts')
+          .delete()
+          .eq('id', postId)
+          .eq('user_id', currentUser.id);
+
+        if (error) {
+          console.warn('Could not delete post in Supabase:', error.message);
+        }
+      } catch (err) {
+        console.warn('Supabase post delete error:', err);
+      }
     }
   };
 
@@ -1651,7 +1796,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return likes.some(l => l.postId === postId && String(l.userId) === String(currentUser.id));
   };
 
-  const toggleLike = (postId: number) => {
+  const toggleLike = async (postId: number) => {
     if (!currentUser) {
       showToast('Please log in to like discussions.', 'warning');
       navigate('/login');
@@ -1662,38 +1807,134 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (alreadyLiked) {
       setLikes(prev => prev.filter(l => !(l.postId === postId && String(l.userId) === String(currentUser.id))));
       setCommunityPosts(prev =>
-        prev.map(p => (p.id === postId ? { ...p, like_count: Math.max(0, p.like_count - 1) } : p))
+        prev.map(p => (p.id === postId ? { ...p, like_count: Math.max(0, (p.like_count || 0) - 1) } : p))
       );
+
+      if (isSupabaseConfigured() && isValidUuid(currentUser.id)) {
+        try {
+          await supabase
+            .from('post_likes')
+            .delete()
+            .eq('post_id', postId)
+            .eq('user_id', currentUser.id);
+        } catch (err) {
+          console.warn('Supabase like removal error:', err);
+        }
+      }
     } else {
       setLikes(prev => [...prev, { postId, userId: currentUser.id }]);
       setCommunityPosts(prev =>
-        prev.map(p => (p.id === postId ? { ...p, like_count: p.like_count + 1 } : p))
+        prev.map(p => (p.id === postId ? { ...p, like_count: (p.like_count || 0) + 1 } : p))
       );
+
+      if (isSupabaseConfigured() && isValidUuid(currentUser.id)) {
+        try {
+          await supabase
+            .from('post_likes')
+            .insert({ post_id: postId, user_id: currentUser.id });
+        } catch (err) {
+          console.warn('Supabase like insert error:', err);
+        }
+      }
     }
   };
 
-  const addComment = (postId: number, commentText: string) => {
+  const addComment = async (postId: number, commentText: string): Promise<boolean> => {
     if (!currentUser) {
       showToast('Please log in to comment.', 'warning');
       navigate('/login');
-      return;
+      return false;
     }
 
+    const cleanComment = commentText.trim();
+    if (!cleanComment) return false;
+
+    const tempId = Date.now();
     const newComment: Comment = {
-      id: Date.now(),
+      id: tempId,
       post_id: postId,
       user_id: currentUser.id,
       comment_author: currentUser.full_name,
       comment_state: currentUser.state,
-      comment: commentText.trim(),
+      comment: cleanComment,
       created_at: new Date().toISOString()
     };
 
     setComments(prev => [...prev, newComment]);
     setCommunityPosts(prev =>
-      prev.map(p => (p.id === postId ? { ...p, comment_count: p.comment_count + 1 } : p))
+      prev.map(p => (p.id === postId ? { ...p, comment_count: (p.comment_count || 0) + 1 } : p))
     );
     showToast('Your comment was added!', 'success');
+
+    if (isSupabaseConfigured() && isValidUuid(currentUser.id)) {
+      try {
+        const { data, error } = await supabase
+          .from('comments')
+          .insert({
+            post_id: postId,
+            user_id: currentUser.id,
+            comment_author: currentUser.full_name,
+            comment_state: currentUser.state,
+            comment: cleanComment
+          })
+          .select('id, created_at')
+          .single();
+
+        if (error) {
+          console.warn('Could not persist comment to Supabase:', error.message);
+        } else if (data) {
+          setComments(prev =>
+            prev.map(c => (c.id === tempId ? { ...c, id: Number(data.id), created_at: data.created_at } : c))
+          );
+        }
+      } catch (err) {
+        console.warn('Supabase comment insert error:', err);
+      }
+    }
+    return true;
+  };
+
+  const deleteComment = async (commentId: number, postId: number): Promise<void> => {
+    if (!currentUser) {
+      showToast('Please log in to remove comments.', 'warning');
+      return;
+    }
+
+    if (currentUser.role === 'admin') {
+      try {
+        await adminRequest('/api/admin/community/comments/' + commentId, { method: 'DELETE' });
+        setComments(prev => prev.filter(c => c.id !== commentId));
+        setCommunityPosts(prev =>
+          prev.map(p => (p.id === postId ? { ...p, comment_count: Math.max(0, (p.comment_count || 0) - 1) } : p))
+        );
+        showToast('Comment removed by administrator.', 'success');
+      } catch (error: any) {
+        showToast(error.message || 'Could not delete comment.', 'danger');
+      }
+      return;
+    }
+
+    setComments(prev => prev.filter(c => c.id !== commentId));
+    setCommunityPosts(prev =>
+      prev.map(p => (p.id === postId ? { ...p, comment_count: Math.max(0, (p.comment_count || 0) - 1) } : p))
+    );
+    showToast('Comment removed.', 'info');
+
+    if (isSupabaseConfigured() && isValidUuid(currentUser.id)) {
+      try {
+        const { error } = await supabase
+          .from('comments')
+          .delete()
+          .eq('id', commentId)
+          .eq('user_id', currentUser.id);
+
+        if (error) {
+          console.warn('Could not delete comment in Supabase:', error.message);
+        }
+      } catch (err) {
+        console.warn('Supabase comment delete error:', err);
+      }
+    }
   };
 
   // User management uses protected server-side admin endpoints.
@@ -1779,11 +2020,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addResource,
         editResource,
         deleteResource,
+        isCommunityLoading,
+        communityError,
+        refreshCommunity,
         createPost,
         deletePost,
         toggleLike,
         isPostLiked,
         addComment,
+        deleteComment,
         toggleUserRole,
         deleteUser
       }}

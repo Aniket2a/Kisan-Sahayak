@@ -8,8 +8,12 @@ export const CommunityPage: React.FC = () => {
     communityPosts,
     comments,
     currentUser,
+    isCommunityLoading,
+    communityError,
+    refreshCommunity,
     createPost,
     deletePost,
+    deleteComment,
     toggleLike,
     isPostLiked,
     addComment,
@@ -85,11 +89,28 @@ export const CommunityPage: React.FC = () => {
       <div className="community-layout" style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '2rem', alignItems: 'flex-start' }}>
         {/* Left Column: Post Feed */}
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
             <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--forest-dark)', margin: 0 }}>
               {t('community_discussions_heading')} ({communityPosts.length})
             </h2>
+            <button
+              type="button"
+              onClick={() => refreshCommunity()}
+              disabled={isCommunityLoading}
+              className="btn btn-secondary btn-sm"
+              style={{ borderRadius: 'var(--radius-full)', padding: '0.35rem 0.85rem' }}
+            >
+              <i className={`fa-solid fa-arrows-rotate ${isCommunityLoading ? 'fa-spin' : ''}`}></i>
+              <span style={{ marginLeft: '0.4rem' }}>{isCommunityLoading ? 'Syncing...' : 'Refresh'}</span>
+            </button>
           </div>
+
+          {communityError && (
+            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', padding: '0.85rem 1.25rem', borderRadius: 'var(--radius-md)', marginBottom: '1.5rem', fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span><i className="fa-solid fa-triangle-exclamation" style={{ marginRight: '0.5rem' }}></i>{communityError}</span>
+              <button onClick={() => refreshCommunity()} className="btn btn-sm" style={{ background: '#fee2e2', color: '#991b1b', border: 'none' }}>Retry</button>
+            </div>
+          )}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             {communityPosts.map(post => {
@@ -225,9 +246,28 @@ export const CommunityPage: React.FC = () => {
                               <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--forest-dark)' }}>
                                 {c.comment_author} {c.comment_state ? `(${c.comment_state})` : ''}
                               </span>
-                              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                {new Date(c.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-                              </span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                  {new Date(c.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                                </span>
+                                {currentUser && (String(currentUser.id) === String(c.user_id) || currentUser.role === 'admin') && (
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteComment(c.id, post.id)}
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      color: '#ef4444',
+                                      cursor: 'pointer',
+                                      padding: '0.1rem 0.3rem',
+                                      fontSize: '0.75rem'
+                                    }}
+                                    title="Delete comment"
+                                  >
+                                    <i className="fa-solid fa-trash-can"></i>
+                                  </button>
+                                )}
+                              </div>
                             </div>
                             <p style={{ fontSize: '0.88rem', color: 'var(--text-main)', margin: 0 }}>
                               {c.comment}

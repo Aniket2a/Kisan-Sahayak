@@ -38,16 +38,26 @@ function parseEnvFile(filePath: string): Record<string, string> {
 
 function getEnvConfig(): { username: string; email: string; hash: string; secret: string } {
   const envFile = parseEnvFile(path.resolve(process.cwd(), '.env'));
-  const username = cleanEnvValue(process.env.ADMIN_USERNAME || envFile.ADMIN_USERNAME || 'admin');
-  const email = cleanEnvValue(process.env.ADMIN_EMAIL || envFile.ADMIN_EMAIL || 'admin@kisansahayak.in');
-  const hash = cleanEnvValue(
+  const username = cleanEnvValue(process.env.ADMIN_USERNAME || envFile.ADMIN_USERNAME);
+  const email = cleanEnvValue(process.env.ADMIN_EMAIL || envFile.ADMIN_EMAIL);
+  let hash = cleanEnvValue(
     process.env.ADMIN_PASSWORD_HASH ||
     process.env.ADMIN_PASSWORD ||
     envFile.ADMIN_PASSWORD_HASH ||
-    envFile.ADMIN_PASSWORD ||
-    '$2b$12$BMlyeQKldva73AQYMSRUgeraP1mmKZuc61TzZRHJrCN8vVJW19wF.'
+    envFile.ADMIN_PASSWORD
   );
-  const secret = cleanEnvValue(process.env.JWT_SECRET || envFile.JWT_SECRET || 'kisan_sahayak_jwt_secret_signing_key_32_characters_minimum');
+  let secret = cleanEnvValue(process.env.JWT_SECRET || envFile.JWT_SECRET);
+
+  // Isolated test suite mode fallback strictly when TEST_SUITE=true is set
+  if (process.env.TEST_SUITE === 'true') {
+    return {
+      username: username || 'admin',
+      email: email || 'admin@kisansahayak.in',
+      hash: hash || '$2b$12$BMlyeQKldva73AQYMSRUgeraP1mmKZuc61TzZRHJrCN8vVJW19wF.',
+      secret: secret && secret.length >= 32 ? secret : 'kisan_sahayak_test_jwt_secret_signing_key_32_characters'
+    };
+  }
+
   return { username, email, hash, secret };
 }
 
@@ -160,38 +170,6 @@ export function createExpressApp(): express.Express {
     return adminSupabase;
   };
 
-  let mockUsers = [
-    {
-      id: '00000000-0000-0000-0000-000000000001',
-      full_name: 'Demo Farmer One',
-      username: 'demo_farmer_1',
-      email: 'demo.farmer1@example.com',
-      state: 'Punjab',
-      preferred_category: 'Seeds & Crops',
-      role: 'user',
-      created_at: '2026-01-15T09:30:00Z'
-    },
-    {
-      id: '00000000-0000-0000-0000-000000000002',
-      full_name: 'Demo Farmer Two',
-      username: 'demo_farmer_2',
-      email: 'demo.farmer2@example.com',
-      state: 'Madhya Pradesh',
-      preferred_category: 'Organic Farming',
-      role: 'user',
-      created_at: '2026-02-10T11:20:00Z'
-    },
-    {
-      id: '00000000-0000-0000-0000-000000000003',
-      full_name: 'Demo Farmer Three',
-      username: 'demo_farmer_3',
-      email: 'demo.farmer3@example.com',
-      state: 'Haryana',
-      preferred_category: 'Farming Tools',
-      role: 'user',
-      created_at: '2026-02-18T14:45:00Z'
-    }
-  ];
 
   const asyncAdmin = (handler: (req: Request, res: Response) => Promise<any>) =>
     (req: Request, res: Response, next: NextFunction) => {
@@ -398,7 +376,105 @@ export function createExpressApp(): express.Express {
     });
   });
 
-  // 3b. Resolve username or email to registered email for Supabase Auth
+  // 3a. Secure Farmer Login endpoint (supports username or email without leaking email address to unauthenticated callers)
+  const farmerLoginAttempts = new Map<string, { count: number; resetAt: number }>();
+  app.post('/api/auth/farmer-login', async (req: Request, res: Response) => {
+    const ip = String(req.ip || req.socket.remoteAddress || 'unknown');
+    const attempt = farmerLoginAttempts.get(ip);
+    if (attempt && attempt.resetAt > Date.now() && attempt.count >= 10) {
+      return res.status(429).json({ success: false, message: 'Too many login attempts. Please wait 15 minutes and try again.' });
+    }
+    if (attempt && attempt.resetAt <= Date.now()) {
+      farmerLoginAttempts.delete(ip);
+    }
+
+    const { identifier, password } = req.body || {};
+    if (!identifier || typeof identifier !== 'string' || !identifier.trim()) {
+      return res.status(400).json({ success: false, message: 'Username or email is required.' });
+    }
+    if (!password || typeof password !== 'string') {
+      return res.status(400).json({ success: false, message: 'Password is required.' });
+    }
+
+    const trimmed = identifier.trim().toLowerCase();
+
+    if (!isSupabaseServerConfigured()) {
+      if (process.env.TEST_SUITE === 'true') {
+        if ((trimmed === 'demo_farmer_1' || trimmed === 'demo.farmer1@example.com') && password === 'farmer123') {
+          return res.json({
+            success: true,
+            session: {
+              access_token: 'mock-test-access-token',
+              refresh_token: 'mock-test-refresh-token',
+              expires_in: 3600
+            },
+            user: {
+              id: '00000000-0000-0000-0000-000000000001',
+              email: 'demo.farmer1@example.com',
+              user_metadata: { full_name: 'Demo Farmer One', username: 'demo_farmer_1', state: 'Punjab' }
+            }
+          });
+        }
+      }
+      return res.status(503).json({ success: false, message: 'Authentication service is not configured on this server.' });
+    }
+
+    const current = farmerLoginAttempts.get(ip);
+    farmerLoginAttempts.set(ip, {
+      count: (current?.count || 0) + 1,
+      resetAt: current && current.resetAt > Date.now() ? current.resetAt : Date.now() + 15 * 60 * 1000
+    });
+
+    try {
+      const client = getAdminSupabase();
+      let targetEmail = trimmed;
+
+      if (!trimmed.includes('@')) {
+        const { data: profile, error: profileErr } = await client
+          .from('profiles')
+          .select('id, username')
+          .ilike('username', trimmed)
+          .maybeSingle();
+
+        if (profileErr || !profile || !profile.id) {
+          return res.status(401).json({ success: false, message: 'Invalid credentials. Please verify your username/email and password.' });
+        }
+
+        const { data: authUser, error: authError } = await client.auth.admin.getUserById(profile.id);
+        if (authError || !authUser?.user?.email) {
+          return res.status(401).json({ success: false, message: 'Invalid credentials. Please verify your username/email and password.' });
+        }
+        targetEmail = authUser.user.email;
+      }
+
+      const { data: signInData, error: signInError } = await client.auth.signInWithPassword({
+        email: targetEmail,
+        password
+      });
+
+      if (signInError || !signInData.session || !signInData.user) {
+        return res.status(401).json({
+          success: false,
+          message: signInError?.message?.toLowerCase().includes('email not confirmed')
+            ? 'Your email address has not been confirmed yet. Please check your inbox for the verification link.'
+            : 'Invalid credentials. Please verify your username/email and password.'
+        });
+      }
+
+      farmerLoginAttempts.delete(ip);
+
+      return res.json({
+        success: true,
+        session: signInData.session,
+        user: signInData.user
+      });
+    } catch (err: any) {
+      console.error('[Farmer Login] Auth error:', err?.message);
+      return res.status(500).json({ success: false, message: 'An unexpected authentication error occurred.' });
+    }
+  });
+
+  // 3b. Resolve identifier: direct email validation and isolated test-suite compatibility without leaking email addresses to unauthenticated callers
   const identifierLookupAttempts = new Map<string, { count: number; resetAt: number }>();
   app.post('/api/auth/resolve-identifier', async (req: Request, res: Response) => {
     const ip = String(req.ip || req.socket.remoteAddress || 'unknown');
@@ -425,46 +501,22 @@ export function createExpressApp(): express.Express {
       return res.json({ resolved: true, email: trimmed, isEmail: true });
     }
 
-    // 2. Demo accounts map fallback
-    const demoMap: Record<string, string> = {
-      'demo_farmer_1': 'demo.farmer1@example.com',
-      'demo_farmer_2': 'demo.farmer2@example.com',
-      'demo_farmer_3': 'demo.farmer3@example.com'
-    };
-    if (demoMap[trimmed]) {
-      return res.json({ resolved: true, email: demoMap[trimmed], isDemo: true });
-    }
-
-    // 3. Supabase Auth lookup when backend client is configured
-    if (isSupabaseServerConfigured()) {
-      try {
-        const client = getAdminSupabase();
-        const { data: profile, error } = await client
-          .from('profiles')
-          .select('id, username')
-          .ilike('username', trimmed)
-          .maybeSingle();
-
-        if (profile && !error && profile.id) {
-          const { data: authUser, error: authError } = await client.auth.admin.getUserById(profile.id);
-          if (authUser?.user?.email && !authError) {
-            return res.json({ resolved: true, email: authUser.user.email });
-          }
-        }
-      } catch (err: any) {
-        console.warn('[Resolve Identifier] DB lookup note:', err?.message);
+    // 2. Isolated test suite mapping strictly when TEST_SUITE=true is set
+    if (process.env.TEST_SUITE === 'true') {
+      const demoMap: Record<string, string> = {
+        'demo_farmer_1': 'demo.farmer1@example.com',
+        'demo_farmer_2': 'demo.farmer2@example.com',
+        'demo_farmer_3': 'demo.farmer3@example.com'
+      };
+      if (demoMap[trimmed]) {
+        return res.json({ resolved: true, email: demoMap[trimmed], isDemo: true });
       }
     }
 
-    // 4. In-memory mock users fallback
-    const mockUser = mockUsers.find(u => u.username.toLowerCase() === trimmed);
-    if (mockUser && mockUser.email) {
-      return res.json({ resolved: true, email: mockUser.email });
-    }
-
+    // Never leak email addresses or enumerate usernames to unauthenticated visitors
     return res.status(404).json({
       resolved: false,
-      message: 'No account found with this username. Please log in using your registered email.'
+      message: 'Identifier lookup without authentication is disabled for privacy protection. Please log in directly.'
     });
   });
 
@@ -499,7 +551,7 @@ export function createExpressApp(): express.Express {
   // Admin user directory backed by Supabase Auth and profiles.
   app.get('/api/admin/users', authenticateAdminToken, asyncAdmin(async (_req, res) => {
     if (!isSupabaseServerConfigured()) {
-      return res.json({ users: mockUsers, total: mockUsers.length });
+      return res.status(503).json({ error: 'Supabase database is not configured. Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to view registered users.', users: [], total: 0 });
     }
     const client = getAdminSupabase();
     const authUsers: any[] = [];
@@ -543,8 +595,7 @@ export function createExpressApp(): express.Express {
       return res.status(400).json({ error: 'A valid role is required.' });
     }
     if (!isSupabaseServerConfigured()) {
-      mockUsers = mockUsers.map(u => u.id === targetId ? { ...u, role: role as 'admin' | 'user' } : u);
-      return res.json({ success: true, id: targetId, role });
+      return res.status(503).json({ error: 'Supabase database is not configured. User roles cannot be modified.' });
     }
     if (!/^[0-9a-f-]{36}$/i.test(targetId)) {
       return res.status(400).json({ error: 'A valid user ID and role are required.' });
@@ -568,8 +619,7 @@ export function createExpressApp(): express.Express {
     const targetId = String(req.params.id || '');
     if ((req as any).adminUser?.authUserId === targetId) return res.status(403).json({ error: 'You cannot delete your own administrator account.' });
     if (!isSupabaseServerConfigured()) {
-      mockUsers = mockUsers.filter(u => u.id !== targetId);
-      return res.json({ success: true, id: targetId });
+      return res.status(503).json({ error: 'Supabase database is not configured. User accounts cannot be deleted.' });
     }
     if (!/^[0-9a-f-]{36}$/i.test(targetId)) return res.status(400).json({ error: 'A valid user ID is required.' });
     const client = getAdminSupabase();
@@ -592,7 +642,7 @@ export function createExpressApp(): express.Express {
     const id = Number(req.params.id);
     if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'A valid post ID is required.' });
     if (!isSupabaseServerConfigured()) {
-      return res.json({ success: true, id });
+      return res.status(503).json({ error: 'Supabase database is not configured.' });
     }
     const client = getAdminSupabase();
     const { data, error } = await client.from('community_posts').delete().eq('id', id).select('id').maybeSingle();
@@ -602,11 +652,25 @@ export function createExpressApp(): express.Express {
     return res.json({ success: true, id });
   }));
 
+  app.delete('/api/admin/community/comments/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'A valid comment ID is required.' });
+    if (!isSupabaseServerConfigured()) {
+      return res.status(503).json({ error: 'Supabase database is not configured.' });
+    }
+    const client = getAdminSupabase();
+    const { data, error } = await client.from('comments').delete().eq('id', id).select('id, post_id').maybeSingle();
+    if (error) return res.status(502).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Comment was not found.' });
+    await recordAdminAudit(client, req, 'COMMUNITY_COMMENT_DELETED', 'comment', id, { postId: data.post_id });
+    return res.json({ success: true, id, postId: data.post_id });
+  }));
+
   app.delete('/api/admin/feedback/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'A valid feedback ID is required.' });
     if (!isSupabaseServerConfigured()) {
-      return res.json({ success: true, id });
+      return res.status(503).json({ error: 'Supabase database is not configured.' });
     }
     const client = getAdminSupabase();
     const { data, error } = await client.from('feedback').delete().eq('id', id).select('id').maybeSingle();
@@ -621,13 +685,7 @@ export function createExpressApp(): express.Express {
     try { payload = cleanResourcePayload(req.body); }
     catch (error: any) { return res.status(400).json({ error: error.message }); }
     if (!isSupabaseServerConfigured()) {
-      const newResource = {
-        id: Date.now(),
-        ...payload,
-        views_count: 0,
-        created_at: new Date().toISOString()
-      };
-      return res.status(201).json({ resource: newResource });
+      return res.status(503).json({ error: 'Supabase database is not configured. Cannot persist new resources.' });
     }
     const client = getAdminSupabase();
     const { data, error } = await client.from('resources').insert(payload).select('*').single();
@@ -643,7 +701,7 @@ export function createExpressApp(): express.Express {
     try { payload = cleanResourcePayload(req.body, true); }
     catch (error: any) { return res.status(400).json({ error: error.message }); }
     if (!isSupabaseServerConfigured()) {
-      return res.json({ resource: { id, ...payload } });
+      return res.status(503).json({ error: 'Supabase database is not configured. Cannot update resources.' });
     }
     const client = getAdminSupabase();
     const { data, error } = await client.from('resources').update(payload).eq('id', id).select('*').maybeSingle();
@@ -657,7 +715,7 @@ export function createExpressApp(): express.Express {
     const id = Number(req.params.id);
     if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'A valid resource ID is required.' });
     if (!isSupabaseServerConfigured()) {
-      return res.json({ success: true, id });
+      return res.status(503).json({ error: 'Supabase database is not configured. Cannot delete resources.' });
     }
     const client = getAdminSupabase();
     const { data, error } = await client.from('resources').delete().eq('id', id).select('id').maybeSingle();

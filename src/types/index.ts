@@ -70,16 +70,17 @@ export interface ResourceRating {
 export interface Comment {
   id: number;
   post_id: number;
-  user_id: string | number;
+  user_id?: string | number;
   comment_author: string;
   comment_state?: string;
   comment: string;
   created_at: string;
+  is_author?: boolean;
 }
 
 export interface CommunityPost {
   id: number;
-  user_id: string | number;
+  user_id?: string | number;
   author_name: string;
   author_state: string;
   title: string;
@@ -88,6 +89,8 @@ export interface CommunityPost {
   created_at: string;
   like_count: number;
   comment_count: number;
+  is_author?: boolean;
+  is_liked?: boolean;
 }
 
 export interface MandiPrice {

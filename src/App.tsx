@@ -25,7 +25,7 @@ import { RegisterPage } from './pages/RegisterPage';
 import { ResetPasswordPage } from './pages/ResetPasswordPage';
 
 export const App: React.FC = () => {
-  const { currentRoute } = useApp();
+  const { currentRoute, isAuthLoading } = useApp();
 
   // Scroll to top on route change
   React.useEffect(() => {
@@ -33,6 +33,18 @@ export const App: React.FC = () => {
   }, [currentRoute]);
 
   const renderCurrentPage = () => {
+    const isProtectedRoute = ['/dashboard', '/bookmarks', '/profile', '/admin'].includes(currentRoute);
+    if (isAuthLoading && isProtectedRoute) {
+      return (
+        <div className="container" style={{ paddingTop: '6rem', paddingBottom: '6rem', textAlign: 'center' }}>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.95rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem' }}>
+            <i className="fa-solid fa-circle-notch fa-spin" style={{ color: 'var(--primary-green)', fontSize: '1.25rem' }}></i>
+            <span>Verifying session credentials...</span>
+          </div>
+        </div>
+      );
+    }
+
     switch (currentRoute) {
       case '/':
         return <HomePage />;
