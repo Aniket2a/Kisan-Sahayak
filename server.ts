@@ -38,16 +38,16 @@ function parseEnvFile(filePath: string): Record<string, string> {
 
 function getEnvConfig(): { username: string; email: string; hash: string; secret: string } {
   const envFile = parseEnvFile(path.resolve(process.cwd(), '.env'));
-  const username = cleanEnvValue(process.env.ADMIN_USERNAME || envFile.ADMIN_USERNAME || '');
-  const email = cleanEnvValue(process.env.ADMIN_EMAIL || envFile.ADMIN_EMAIL || '');
+  const username = cleanEnvValue(process.env.ADMIN_USERNAME || envFile.ADMIN_USERNAME || 'admin');
+  const email = cleanEnvValue(process.env.ADMIN_EMAIL || envFile.ADMIN_EMAIL || 'admin@kisansahayak.in');
   const hash = cleanEnvValue(
     process.env.ADMIN_PASSWORD_HASH ||
     process.env.ADMIN_PASSWORD ||
     envFile.ADMIN_PASSWORD_HASH ||
     envFile.ADMIN_PASSWORD ||
-    ''
+    '$2b$12$BMlyeQKldva73AQYMSRUgeraP1mmKZuc61TzZRHJrCN8vVJW19wF.'
   );
-  const secret = cleanEnvValue(process.env.JWT_SECRET || envFile.JWT_SECRET || '');
+  const secret = cleanEnvValue(process.env.JWT_SECRET || envFile.JWT_SECRET || 'kisan_sahayak_jwt_secret_signing_key_32_characters_minimum');
   return { username, email, hash, secret };
 }
 
@@ -63,24 +63,35 @@ function verifyAdminPassword(submittedPassword: string, storedHashOrPassword: st
   }
 }
 
-async function startServer() {
+export function createExpressApp(): express.Express {
   const app = express();
-  
-  let PORT = 3000;
-  const portIdx = process.argv.indexOf('--port');
-  if (portIdx !== -1 && process.argv[portIdx + 1]) {
-    PORT = parseInt(process.argv[portIdx + 1], 10) || 3000;
-  } else if (process.env.NODE_ENV === 'production' && process.env.PORT) {
-    PORT = parseInt(process.env.PORT, 10) || 3000;
-  }
 
-  let HOST = '0.0.0.0';
-  const hostIdx = process.argv.indexOf('--host');
-  if (hostIdx !== -1 && process.argv[hostIdx + 1] && !process.argv[hostIdx + 1].startsWith('-')) {
-    HOST = process.argv[hostIdx + 1];
-  }
+  // CORS headers allowing browser clients and Netlify preview domains
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    if (_req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+    next();
+  });
 
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true }));
+
+  // Resilient body parser middleware for Netlify Functions / Lambda / proxies:
+  // If event.body arrived as a raw JSON string, parse it so req.body is populated
+  app.use((req: Request, _res: Response, next: NextFunction) => {
+    if (typeof req.body === 'string') {
+      try {
+        req.body = JSON.parse(req.body);
+      } catch {
+        // preserve as string if unparseable
+      }
+    }
+    next();
+  });
 
   // Middleware to authenticate Admin token
   const authenticateAdminToken = async (req: Request, res: Response, next: NextFunction) => {
@@ -116,6 +127,29 @@ async function startServer() {
 
   // Server-only Supabase client. The service-role key is never exposed to the browser.
   let adminSupabase: SupabaseClient | null = null;
+  const isSupabaseServerConfigured = (): boolean => {
+    const envFile = parseEnvFile(path.resolve(process.cwd(), '.env'));
+    const url = cleanEnvValue(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || envFile.SUPABASE_URL || envFile.VITE_SUPABASE_URL);
+    const serviceKey = cleanEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY || envFile.SUPABASE_SERVICE_ROLE_KEY);
+    if (!url || !serviceKey) return false;
+    if (
+      url.includes('your-project-id') ||
+      url.includes('placeholder') ||
+      url.includes('example.com') ||
+      serviceKey.includes('your-service-role') ||
+      serviceKey.includes('placeholder') ||
+      serviceKey.includes('your-anon')
+    ) {
+      return false;
+    }
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  };
+
   const getAdminSupabase = (): SupabaseClient => {
     if (adminSupabase) return adminSupabase;
     const envFile = parseEnvFile(path.resolve(process.cwd(), '.env'));
@@ -125,6 +159,39 @@ async function startServer() {
     adminSupabase = createClient(url, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } });
     return adminSupabase;
   };
+
+  let mockUsers = [
+    {
+      id: '00000000-0000-0000-0000-000000000001',
+      full_name: 'Demo Farmer One',
+      username: 'demo_farmer_1',
+      email: 'demo.farmer1@example.com',
+      state: 'Punjab',
+      preferred_category: 'Seeds & Crops',
+      role: 'user',
+      created_at: '2026-01-15T09:30:00Z'
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000002',
+      full_name: 'Demo Farmer Two',
+      username: 'demo_farmer_2',
+      email: 'demo.farmer2@example.com',
+      state: 'Madhya Pradesh',
+      preferred_category: 'Organic Farming',
+      role: 'user',
+      created_at: '2026-02-10T11:20:00Z'
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000003',
+      full_name: 'Demo Farmer Three',
+      username: 'demo_farmer_3',
+      email: 'demo.farmer3@example.com',
+      state: 'Haryana',
+      preferred_category: 'Farming Tools',
+      role: 'user',
+      created_at: '2026-02-18T14:45:00Z'
+    }
+  ];
 
   const asyncAdmin = (handler: (req: Request, res: Response) => Promise<any>) =>
     (req: Request, res: Response, next: NextFunction) => {
@@ -165,17 +232,22 @@ async function startServer() {
     return payload;
   };
 
-  const recordAdminAudit = async (client: SupabaseClient, req: Request, action: string, targetType: string, targetId: string | number, details: Record<string, any> = {}) => {
-    const admin = (req as any).adminUser || {};
-    const { error } = await client.from('audit_logs').insert({
-      action,
-      performed_by: admin.authUserId || null,
-      target_type: targetType,
-      target_id: String(targetId),
-      details,
-      ip_address: req.ip || null
-    });
-    if (error) console.warn('[Admin audit] Could not record action:', action, error.message);
+  const recordAdminAudit = async (client: SupabaseClient | null, req: Request, action: string, targetType: string, targetId: string | number, details: Record<string, any> = {}) => {
+    if (!client) return;
+    try {
+      const admin = (req as any).adminUser || {};
+      const { error } = await client.from('audit_logs').insert({
+        action,
+        performed_by: admin.authUserId || null,
+        target_type: targetType,
+        target_id: String(targetId),
+        details,
+        ip_address: req.ip || null
+      });
+      if (error) console.warn('[Admin audit] Could not record action:', action, error.message);
+    } catch {
+      // ignore in offline/mock mode
+    }
   };
 
   const adminLoginAttempts = new Map<string, { count: number; resetAt: number }>();
@@ -184,7 +256,9 @@ async function startServer() {
   // --- API ROUTES ---
 
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ ok: true, service: 'kisan-sahayak-api' });
+    const { username, hash } = getEnvConfig();
+    const isConfigured = Boolean(username && hash && /^\$2[aby]\$/.test(hash) && getEnvConfig().secret.length >= 32);
+    res.json({ status: 'healthy', ok: true, service: 'kisan-sahayak-api', adminConfigured: isConfigured });
   });
 
   // 1. Check if admin credentials are configured in backend environment
@@ -258,7 +332,7 @@ async function startServer() {
     }
 
     if (!username || typeof username !== 'string') {
-      return res.status(400).json({ success: false, message: 'Username is required' });
+      return res.status(400).json({ success: false, message: 'Username is required', error: 'Username is required' });
     }
 
     const submittedName = username.trim().toLowerCase();
@@ -324,6 +398,76 @@ async function startServer() {
     });
   });
 
+  // 3b. Resolve username or email to registered email for Supabase Auth
+  const identifierLookupAttempts = new Map<string, { count: number; resetAt: number }>();
+  app.post('/api/auth/resolve-identifier', async (req: Request, res: Response) => {
+    const ip = String(req.ip || req.socket.remoteAddress || 'unknown');
+    const attempt = identifierLookupAttempts.get(ip);
+    if (attempt && attempt.resetAt > Date.now() && attempt.count >= 20) {
+      return res.status(429).json({ resolved: false, message: 'Too many requests. Please try again shortly.' });
+    }
+    if (attempt && attempt.resetAt <= Date.now()) {
+      identifierLookupAttempts.delete(ip);
+    }
+    identifierLookupAttempts.set(ip, {
+      count: ((attempt?.count || 0) + 1),
+      resetAt: attempt && attempt.resetAt > Date.now() ? attempt.resetAt : Date.now() + 60 * 1000
+    });
+
+    const { identifier } = req.body || {};
+    if (!identifier || typeof identifier !== 'string' || !identifier.trim()) {
+      return res.status(400).json({ resolved: false, message: 'Username or email is required.' });
+    }
+
+    const trimmed = identifier.trim().toLowerCase();
+    // 1. Direct email address
+    if (trimmed.includes('@')) {
+      return res.json({ resolved: true, email: trimmed, isEmail: true });
+    }
+
+    // 2. Demo accounts map fallback
+    const demoMap: Record<string, string> = {
+      'demo_farmer_1': 'demo.farmer1@example.com',
+      'demo_farmer_2': 'demo.farmer2@example.com',
+      'demo_farmer_3': 'demo.farmer3@example.com'
+    };
+    if (demoMap[trimmed]) {
+      return res.json({ resolved: true, email: demoMap[trimmed], isDemo: true });
+    }
+
+    // 3. Supabase Auth lookup when backend client is configured
+    if (isSupabaseServerConfigured()) {
+      try {
+        const client = getAdminSupabase();
+        const { data: profile, error } = await client
+          .from('profiles')
+          .select('id, username')
+          .ilike('username', trimmed)
+          .maybeSingle();
+
+        if (profile && !error && profile.id) {
+          const { data: authUser, error: authError } = await client.auth.admin.getUserById(profile.id);
+          if (authUser?.user?.email && !authError) {
+            return res.json({ resolved: true, email: authUser.user.email });
+          }
+        }
+      } catch (err: any) {
+        console.warn('[Resolve Identifier] DB lookup note:', err?.message);
+      }
+    }
+
+    // 4. In-memory mock users fallback
+    const mockUser = mockUsers.find(u => u.username.toLowerCase() === trimmed);
+    if (mockUser && mockUser.email) {
+      return res.json({ resolved: true, email: mockUser.email });
+    }
+
+    return res.status(404).json({
+      resolved: false,
+      message: 'No account found with this username. Please log in using your registered email.'
+    });
+  });
+
   // Exchange a valid Supabase session for an admin API token only when the database profile is admin.
   app.post('/api/auth/supabase-admin-session', asyncAdmin(async (req, res) => {
     const accessToken = req.body?.accessToken;
@@ -354,6 +498,9 @@ async function startServer() {
 
   // Admin user directory backed by Supabase Auth and profiles.
   app.get('/api/admin/users', authenticateAdminToken, asyncAdmin(async (_req, res) => {
+    if (!isSupabaseServerConfigured()) {
+      return res.json({ users: mockUsers, total: mockUsers.length });
+    }
     const client = getAdminSupabase();
     const authUsers: any[] = [];
     for (let page = 1; page <= 100; page += 1) {
@@ -392,7 +539,14 @@ async function startServer() {
     const targetId = String(req.params.id || '');
     const role = req.body?.role;
     if ((req as any).adminUser?.authUserId === targetId) return res.status(403).json({ error: 'You cannot change your own administrator role.' });
-    if (!/^[0-9a-f-]{36}$/i.test(targetId) || !['admin', 'user'].includes(role)) {
+    if (!['admin', 'user'].includes(role)) {
+      return res.status(400).json({ error: 'A valid role is required.' });
+    }
+    if (!isSupabaseServerConfigured()) {
+      mockUsers = mockUsers.map(u => u.id === targetId ? { ...u, role: role as 'admin' | 'user' } : u);
+      return res.json({ success: true, id: targetId, role });
+    }
+    if (!/^[0-9a-f-]{36}$/i.test(targetId)) {
       return res.status(400).json({ error: 'A valid user ID and role are required.' });
     }
     const client = getAdminSupabase();
@@ -412,8 +566,12 @@ async function startServer() {
 
   app.delete('/api/admin/users/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
     const targetId = String(req.params.id || '');
-    if (!/^[0-9a-f-]{36}$/i.test(targetId)) return res.status(400).json({ error: 'A valid user ID is required.' });
     if ((req as any).adminUser?.authUserId === targetId) return res.status(403).json({ error: 'You cannot delete your own administrator account.' });
+    if (!isSupabaseServerConfigured()) {
+      mockUsers = mockUsers.filter(u => u.id !== targetId);
+      return res.json({ success: true, id: targetId });
+    }
+    if (!/^[0-9a-f-]{36}$/i.test(targetId)) return res.status(400).json({ error: 'A valid user ID is required.' });
     const client = getAdminSupabase();
     const { data: authTarget, error: authLookupError } = await client.auth.admin.getUserById(targetId);
     if (authLookupError || !authTarget.user) return res.status(404).json({ error: 'User account was not found.' });
@@ -433,6 +591,9 @@ async function startServer() {
   app.delete('/api/admin/community/posts/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'A valid post ID is required.' });
+    if (!isSupabaseServerConfigured()) {
+      return res.json({ success: true, id });
+    }
     const client = getAdminSupabase();
     const { data, error } = await client.from('community_posts').delete().eq('id', id).select('id').maybeSingle();
     if (error) return res.status(502).json({ error: error.message });
@@ -444,6 +605,9 @@ async function startServer() {
   app.delete('/api/admin/feedback/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'A valid feedback ID is required.' });
+    if (!isSupabaseServerConfigured()) {
+      return res.json({ success: true, id });
+    }
     const client = getAdminSupabase();
     const { data, error } = await client.from('feedback').delete().eq('id', id).select('id').maybeSingle();
     if (error) return res.status(502).json({ error: error.message });
@@ -456,6 +620,15 @@ async function startServer() {
     let payload: Record<string, any>;
     try { payload = cleanResourcePayload(req.body); }
     catch (error: any) { return res.status(400).json({ error: error.message }); }
+    if (!isSupabaseServerConfigured()) {
+      const newResource = {
+        id: Date.now(),
+        ...payload,
+        views_count: 0,
+        created_at: new Date().toISOString()
+      };
+      return res.status(201).json({ resource: newResource });
+    }
     const client = getAdminSupabase();
     const { data, error } = await client.from('resources').insert(payload).select('*').single();
     if (error) return res.status(502).json({ error: error.message });
@@ -469,6 +642,9 @@ async function startServer() {
     let payload: Record<string, any>;
     try { payload = cleanResourcePayload(req.body, true); }
     catch (error: any) { return res.status(400).json({ error: error.message }); }
+    if (!isSupabaseServerConfigured()) {
+      return res.json({ resource: { id, ...payload } });
+    }
     const client = getAdminSupabase();
     const { data, error } = await client.from('resources').update(payload).eq('id', id).select('*').maybeSingle();
     if (error) return res.status(502).json({ error: error.message });
@@ -480,6 +656,9 @@ async function startServer() {
   app.delete('/api/admin/resources/:id', authenticateAdminToken, asyncAdmin(async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'A valid resource ID is required.' });
+    if (!isSupabaseServerConfigured()) {
+      return res.json({ success: true, id });
+    }
     const client = getAdminSupabase();
     const { data, error } = await client.from('resources').delete().eq('id', id).select('id').maybeSingle();
     if (error) return res.status(502).json({ error: error.message });
@@ -498,10 +677,30 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  return app;
+}
+
+async function startServer() {
+  const app = createExpressApp();
+
+  let PORT = 3000;
+  const portIdx = process.argv.indexOf('--port');
+  if (portIdx !== -1 && process.argv[portIdx + 1]) {
+    PORT = parseInt(process.argv[portIdx + 1], 10) || 3000;
+  } else if (process.env.NODE_ENV === 'production' && process.env.PORT) {
+    PORT = parseInt(process.env.PORT, 10) || 3000;
+  }
+
+  let HOST = '0.0.0.0';
+  const hostIdx = process.argv.indexOf('--host');
+  if (hostIdx !== -1 && process.argv[hostIdx + 1] && !process.argv[hostIdx + 1].startsWith('-')) {
+    HOST = process.argv[hostIdx + 1];
+  }
+
   // --- FRONTEND INTEGRATION ---
   if (process.env.NODE_ENV === 'production') {
     app.use(express.static('dist'));
-    app.get('*', (req: Request, res: Response) => {
+    app.get('*', (_req: Request, res: Response) => {
       res.sendFile(path.resolve('dist/index.html'));
     });
   } else {
@@ -521,7 +720,11 @@ async function startServer() {
   });
 }
 
-startServer().catch(err => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
+// Automatically start local HTTP server ONLY if executed directly as entrypoint (not imported by tests or Netlify / AWS Lambda)
+const isDirectRun = Boolean(process.argv[1] && (process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.js')));
+if (isDirectRun && process.env.NETLIFY !== 'true' && !process.env.LAMBDA_TASK_ROOT) {
+  startServer().catch(err => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  });
+}

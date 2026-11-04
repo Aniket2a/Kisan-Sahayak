@@ -54,7 +54,12 @@ export const RegisterPage: React.FC = () => {
       });
 
       if (res.success) {
-        navigate('/dashboard');
+        if (res.emailConfirmationRequired) {
+          showToast('Registration successful! Please check your email inbox to verify your account, then log in.', 'info');
+          navigate('/login');
+        } else {
+          navigate('/dashboard');
+        }
       } else {
         showToast(res.message, 'danger');
       }

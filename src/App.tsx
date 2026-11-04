@@ -22,6 +22,7 @@ import { ProfilePage } from './pages/ProfilePage';
 import { AdminPage } from './pages/AdminPage';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
 
 export const App: React.FC = () => {
   const { currentRoute } = useApp();
@@ -63,6 +64,8 @@ export const App: React.FC = () => {
         return <LoginPage />;
       case '/register':
         return <RegisterPage />;
+      case '/reset-password':
+        return <ResetPasswordPage />;
       default:
         return <HomePage />;
     }

@@ -80,9 +80,13 @@ interface AppContextType {
 
   // Auth & Profile
   login: (usernameOrEmail: string, password?: string) => Promise<{ success: boolean; message: string; role?: string }>;
-  register: (userData: { full_name: string; username: string; email: string; password?: string; state: string; preferred_category: string }) => Promise<{ success: boolean; message: string }>;
+  register: (userData: { full_name: string; username: string; email: string; password?: string; state: string; preferred_category: string }) => Promise<{ success: boolean; message: string; emailConfirmationRequired?: boolean }>;
   logout: () => Promise<void>;
   updateProfile: (updates: { full_name: string; email: string; state: string; preferred_category: string; new_password?: string }) => Promise<{ success: boolean; message: string }>;
+  requestPasswordReset: (email: string) => Promise<{ success: boolean; message: string }>;
+  updatePasswordWithToken: (newPassword: string) => Promise<{ success: boolean; message: string }>;
+  isPasswordRecovery: boolean;
+  setIsPasswordRecovery: (val: boolean) => void;
 
   // Resource CRUD (Admin)
   addResource: (data: Omit<Resource, 'id' | 'views_count'>) => Promise<boolean>;
@@ -210,6 +214,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [adminModalResource, setAdminModalResource] = useState<Resource | null>(null);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState<boolean>(false);
 
   // Sync html lang attribute
   useEffect(() => {
@@ -257,6 +262,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!token) throw new Error('Your admin session has expired. Please sign in again.');
     const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}), Authorization: 'Bearer ' + token } });
     const payload = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      sessionStorage.removeItem('kisan_admin_token');
+      setCurrentUser(prev => (prev?.role === 'admin' ? null : prev));
+      throw new Error('Your admin session has expired. Please sign in again.');
+    }
     if (!response.ok) throw new Error(payload.error || payload.message || ('Admin request failed (' + response.status + ').'));
     return payload;
   };
@@ -350,6 +360,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const farmer = await mapSupabaseUserToUser(session.user);
           const promotedAdmin = farmer.role === 'admin' ? await exchangeSupabaseAdminSession(session.access_token) : null;
           if (isMounted) setCurrentUser(promotedAdmin || { ...farmer, role: 'user' });
+        } else if (event === 'PASSWORD_RECOVERY') {
+          if (isMounted) {
+            setIsPasswordRecovery(true);
+            window.location.hash = '#/reset-password';
+          }
+        } else if (event === 'USER_UPDATED' && session?.user) {
+          const farmer = await mapSupabaseUserToUser(session.user);
+          if (isMounted) setCurrentUser(prev => (prev?.role === 'admin' ? prev : farmer));
         }
       });
       authSubscription = subscription;
@@ -1137,12 +1155,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Backend request error - proceed to farmer auth
     }
 
-    // 2. Farmer authentication via Supabase Auth
+    // 2. Farmer authentication via Supabase Auth or offline demo farmer
     if (!isSupabaseConfigured()) {
-      return {
-        success: false,
-        message: 'Supabase is not configured. Please ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.'
+      const demoMap: Record<string, string> = {
+        'demo_farmer_1': 'demo.farmer1@example.com',
+        'demo_farmer_2': 'demo.farmer2@example.com',
+        'demo_farmer_3': 'demo.farmer3@example.com'
       };
+      const foundUser = users.find(u =>
+        u.username.toLowerCase() === normalized ||
+        u.email.toLowerCase() === normalized ||
+        (demoMap[normalized] && u.email.toLowerCase() === demoMap[normalized])
+      );
+      if (foundUser) {
+        sessionStorage.removeItem('kisan_admin_token');
+        setCurrentUser(foundUser);
+        localStorage.setItem('kisan_current_user', JSON.stringify(foundUser));
+        showToast(`${t('auth_welcome_back')}, ${foundUser.full_name}!`, 'success');
+        return { success: true, message: t('auth_login_success'), role: 'user' };
+      }
+      const mockFarmer: User = {
+        id: `00000000-0000-0000-0000-${String(Date.now()).slice(-12).padStart(12, '0')}`,
+        full_name: trimmedInput,
+        username: normalized.replace(/[^a-z0-9_]/g, '_') || 'farmer',
+        email: normalized.includes('@') ? normalized : `${normalized}@example.com`,
+        state: 'Punjab',
+        preferred_category: 'Seeds & Crops',
+        role: 'user',
+        created_at: new Date().toISOString()
+      };
+      sessionStorage.removeItem('kisan_admin_token');
+      setCurrentUser(mockFarmer);
+      localStorage.setItem('kisan_current_user', JSON.stringify(mockFarmer));
+      showToast(`${t('auth_welcome_back')}, ${mockFarmer.full_name}!`, 'success');
+      return { success: true, message: t('auth_login_success'), role: 'user' };
     }
 
     if (!password) {
@@ -1163,11 +1209,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (demoMap[normalized]) {
       emailToUse = demoMap[normalized];
     } else if (!normalized.includes('@')) {
-      // User entered a username without @. Provide helpful instruction.
-      return {
-        success: false,
-        message: 'Please enter your registered email address (e.g. farmer@example.com) to log in.'
-      };
+      // User entered a username. Query server endpoint to resolve username to email securely.
+      try {
+        const res = await fetch('/api/auth/resolve-identifier', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier: normalized })
+        });
+        const resJson = await res.json().catch(() => ({}));
+        if (res.ok && resJson.email) {
+          emailToUse = resJson.email;
+        } else {
+          return {
+            success: false,
+            message: resJson.error || 'No farmer account found with this username. Please enter your registered email address.'
+          };
+        }
+      } catch {
+        return {
+          success: false,
+          message: 'Please enter your registered email address (e.g. farmer@example.com) to log in.'
+        };
+      }
     }
 
     try {
@@ -1225,7 +1288,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     password?: string;
     state: string;
     preferred_category: string;
-  }): Promise<{ success: boolean; message: string }> => {
+  }): Promise<{ success: boolean; message: string; emailConfirmationRequired?: boolean }> => {
     const rawUname = userData.username.trim().toLowerCase();
     const cleanUsername = rawUname.replace(/[^a-z0-9_]/g, '_');
     const uemail = userData.email.trim().toLowerCase();
@@ -1245,10 +1308,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (!isSupabaseConfigured()) {
-      return {
-        success: false,
-        message: 'Supabase is not configured. Please ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.'
+      const newUser: User = {
+        id: `00000000-0000-0000-0000-${String(Date.now()).slice(-12).padStart(12, '0')}`,
+        full_name: userData.full_name.trim(),
+        username: cleanUsername,
+        email: uemail,
+        state: userData.state || 'General',
+        preferred_category: userData.preferred_category || 'General',
+        role: 'user',
+        created_at: new Date().toISOString()
       };
+      setUsers(prev => [...prev, newUser]);
+      setCurrentUser(newUser);
+      localStorage.setItem('kisan_current_user', JSON.stringify(newUser));
+      showToast(t('auth_registered_success'), 'success');
+      return { success: true, emailConfirmationRequired: false, message: t('auth_registered_success') };
     }
 
     try {
@@ -1296,12 +1370,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const farmerUser = await mapSupabaseUserToUser(data.user);
         setCurrentUser(farmerUser);
         showToast(`${t('auth_welcome_reg')}`, 'success');
-        return { success: true, message: t('auth_reg_success') };
+        return { success: true, emailConfirmationRequired: false, message: t('auth_reg_success') };
       } else {
         // Email confirmation is enabled
         showToast('Registration successful! Please check your email to verify your account, or log in.', 'info');
         return {
           success: true,
+          emailConfirmationRequired: true,
           message: 'Registration successful! If verification is required, please check your inbox.'
         };
       }
@@ -1310,6 +1385,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         success: false,
         message: err?.message || 'Registration error. Please check your network connection.'
       };
+    }
+  };
+
+  // Auth: Password Reset Flow
+  const requestPasswordReset = async (email: string): Promise<{ success: boolean; message: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      return { success: false, message: 'Please enter a valid email address.' };
+    }
+
+    if (!isSupabaseConfigured()) {
+      showToast('Demo Mode: Password reset link simulated for ' + cleanEmail, 'info');
+      return { success: true, message: 'A password reset link has been simulated for your email.' };
+    }
+
+    try {
+      const redirectUrl = `${window.location.origin}/#/reset-password`;
+      const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+        redirectTo: redirectUrl
+      });
+
+      if (error) {
+        return { success: false, message: error.message };
+      }
+
+      showToast('Password reset link sent! Check your email inbox.', 'success');
+      return { success: true, message: 'Password reset link sent to ' + cleanEmail };
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'Failed to send password reset link.' };
+    }
+  };
+
+  const updatePasswordWithToken = async (newPassword: string): Promise<{ success: boolean; message: string }> => {
+    if (!newPassword || newPassword.length < 6) {
+      return { success: false, message: t('auth_password_short') || 'Password must be at least 6 characters.' };
+    }
+
+    if (!isSupabaseConfigured()) {
+      showToast('Password updated successfully (Demo Mode).', 'success');
+      setIsPasswordRecovery(false);
+      return { success: true, message: 'Password updated successfully.' };
+    }
+
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword
+      });
+
+      if (error) {
+        return { success: false, message: error.message };
+      }
+
+      showToast('Password updated successfully! You can now log in.', 'success');
+      setIsPasswordRecovery(false);
+      return { success: true, message: 'Password updated successfully.' };
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'Failed to update password.' };
     }
   };
 
@@ -1417,8 +1549,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return false; }
     if (resources.some(r => r.title.toLowerCase() === data.title.toLowerCase())) { showToast('A resource with this title already exists.', 'warning'); return false; }
     try {
-      await adminRequest('/api/admin/resources', { method: 'POST', body: JSON.stringify({ title: data.title, description: data.description, category_id: data.category_id, resource_type: data.resource_type, external_url: data.external_url, image_url: data.image_url, season_climate: data.season_climate, eligibility: data.eligibility, benefits: data.benefits, provider: data.provider }) });
-      await fetchResources(); showToast('Resource created successfully.', 'success'); return true;
+      const resp = await adminRequest('/api/admin/resources', { method: 'POST', body: JSON.stringify({ title: data.title, description: data.description, category_id: data.category_id, resource_type: data.resource_type, external_url: data.external_url, image_url: data.image_url, season_climate: data.season_climate, eligibility: data.eligibility, benefits: data.benefits, provider: data.provider }) });
+      if (!isSupabaseConfigured() && resp.resource) {
+        const cat = categories.find(c => c.id === Number(resp.resource.category_id));
+        const resWithCat: Resource = { ...resp.resource, category_name: cat?.name || 'General' };
+        setResources(prev => {
+          const next = [resWithCat, ...prev];
+          localStorage.setItem('kisan_resources', JSON.stringify(next));
+          return next;
+        });
+      } else {
+        await fetchResources();
+      }
+      showToast('Resource created successfully.', 'success');
+      return true;
     } catch (error: any) { showToast(error.message || 'Resource creation failed.', 'danger'); return false; }
   };
 
@@ -1426,13 +1570,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return false; }
     const payload: Record<string, any> = {};
     ['title','description','category_id','resource_type','external_url','image_url','season_climate','eligibility','benefits','provider'].forEach(key => { if ((data as any)[key] !== undefined) payload[key] = (data as any)[key]; });
-    try { await adminRequest('/api/admin/resources/' + id, { method: 'PATCH', body: JSON.stringify(payload) }); await fetchResources(); showToast('Resource updated successfully.', 'success'); return true; }
+    try {
+      await adminRequest('/api/admin/resources/' + id, { method: 'PATCH', body: JSON.stringify(payload) });
+      if (!isSupabaseConfigured()) {
+        setResources(prev => {
+          const next = prev.map(r => r.id === id ? { ...r, ...payload } : r);
+          localStorage.setItem('kisan_resources', JSON.stringify(next));
+          return next;
+        });
+      } else {
+        await fetchResources();
+      }
+      showToast('Resource updated successfully.', 'success');
+      return true;
+    }
     catch (error: any) { showToast(error.message || 'Resource update failed.', 'danger'); return false; }
   };
 
   const deleteResource = async (id: number): Promise<boolean> => {
     if (!currentUser || currentUser.role !== 'admin') { showToast('Administrator access is required to manage resources.', 'danger'); return false; }
-    try { await adminRequest('/api/admin/resources/' + id, { method: 'DELETE' }); await fetchResources(); showToast('Resource deleted successfully.', 'success'); return true; }
+    try {
+      await adminRequest('/api/admin/resources/' + id, { method: 'DELETE' });
+      if (!isSupabaseConfigured()) {
+        setResources(prev => {
+          const next = prev.filter(r => r.id !== id);
+          localStorage.setItem('kisan_resources', JSON.stringify(next));
+          return next;
+        });
+      } else {
+        await fetchResources();
+      }
+      showToast('Resource deleted successfully.', 'success');
+      return true;
+    }
     catch (error: any) { showToast(error.message || 'Resource deletion failed.', 'danger'); return false; }
   };
   // Community
@@ -1601,6 +1771,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         login,
         register,
         logout,
+        requestPasswordReset,
+        updatePasswordWithToken,
+        isPasswordRecovery,
+        setIsPasswordRecovery,
         updateProfile,
         addResource,
         editResource,
